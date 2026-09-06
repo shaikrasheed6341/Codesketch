@@ -2,7 +2,8 @@ import arrow from './arrow';
 import circle from './circle';
 import rectangle from './recantagle';
 import line from './line';
-
+import drawEraser from './eraser';
+import { panCanvas } from './pan';
 type Point = { x: number; y: number };
 
 export function drawPencilStroke(ctx: CanvasRenderingContext2D, points: Point[]) {
@@ -41,5 +42,9 @@ export default function drawshape(
     rectangle(ctx, startX, startY, endX, endY);
   } else if (selectedTool === 'pencil') {
     drawPencilStroke(ctx, points);
+  }else if (selectedTool === 'eraser') {
+    drawEraser(ctx, startX, startY);
+  }else if(selectedTool === 'pan'){
+    panCanvas(startX, startY, endX, endY);
   }
 }
