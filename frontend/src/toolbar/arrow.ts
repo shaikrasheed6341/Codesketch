@@ -1,6 +1,11 @@
 export default function drawArrow(ctx: CanvasRenderingContext2D, startX: number, startY: number, endX: number, endY: number) {
   const arrowSize = 15;
 
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
   // Main line
   ctx.beginPath();
 

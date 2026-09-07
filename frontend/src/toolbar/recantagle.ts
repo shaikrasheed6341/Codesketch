@@ -3,6 +3,8 @@ export default function drawRectangle(ctx: CanvasRenderingContext2D, startX: num
   const height = endY - startY;
 
   ctx.beginPath();
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 3;
 
   ctx.rect(
     startX,

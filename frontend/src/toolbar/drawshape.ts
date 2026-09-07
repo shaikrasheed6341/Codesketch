@@ -16,10 +16,10 @@ export function drawPencilStroke(ctx: CanvasRenderingContext2D, points: Point[])
     ctx.lineTo(points[i].x, points[i].y);
   }
 
-  ctx.lineWidth = 5;
+  ctx.lineWidth = 3;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
-  ctx.strokeStyle = 'blue';
+  ctx.strokeStyle = '#ffffff';
   ctx.stroke();
 }
 

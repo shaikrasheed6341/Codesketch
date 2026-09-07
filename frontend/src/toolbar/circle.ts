@@ -6,6 +6,8 @@ export default function drawCircle(ctx: CanvasRenderingContext2D, shape: { start
   const centerY = (shape.startY + shape.endY) / 2;
 
   ctx.beginPath();
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 3;
 
   ctx.ellipse(
     centerX,

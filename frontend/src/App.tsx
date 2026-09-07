@@ -14,7 +14,7 @@ import { MdOutlineHorizontalRule } from "react-icons/md";
 import { FaArrowRightLong } from "react-icons/fa6";
 import { RiCircleLine, RiEraserLine, RiRectangleLine } from "react-icons/ri";
 import { IoHandLeftOutline } from "react-icons/io5";
-
+import { getWebcamStream } from "./webcam";
 type Point = {
   x: number;
   y: number;
@@ -43,7 +43,8 @@ type Interaction = {
   handle?: ResizeHandle;
 };
 
-const makeShapeId = () => `shape-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const makeShapeId = () =>
+  `shape-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const distanceToSegment = (point: Point, a: Point, b: Point) => {
   const dx = b.x - a.x;
@@ -54,7 +55,8 @@ const distanceToSegment = (point: Point, a: Point, b: Point) => {
     return Math.hypot(point.x - a.x, point.y - a.y);
   }
 
-  const projection = ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared;
+  const projection =
+    ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared;
   const clamped = Math.max(0, Math.min(1, projection));
   const closestX = a.x + clamped * dx;
   const closestY = a.y + clamped * dy;
@@ -82,7 +84,14 @@ const moveShape = (shape: Shape, dx: number, dy: number): Shape => {
   };
 };
 
-const resizeShape = (shape: Shape, handle: ResizeHandle, pointer: Point, original: Shape): Shape => {
+
+
+const resizeShape = (
+  shape: Shape,
+  handle: ResizeHandle,
+  pointer: Point,
+  original: Shape,
+): Shape => {
   const startX = original.startX ?? 0;
   const startY = original.startY ?? 0;
   const endX = original.endX ?? 0;
@@ -136,7 +145,13 @@ const resizeShape = (shape: Shape, handle: ResizeHandle, pointer: Point, origina
 
 function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const panStartRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
+  const canvasContainerRef = useRef<HTMLDivElement | null>(null);
+  const panStartRef = useRef<{
+    x: number;
+    y: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
   const interactionRef = useRef<Interaction | null>(null);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -145,20 +160,24 @@ function App() {
   const [draftShape, setDraftShape] = useState<Shape | null>(null);
   const [draftPoints, setDraftPoints] = useState<Point[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
 
-  const getCanvasPoint = useCallback((event: ReactMouseEvent<HTMLCanvasElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const scaleX = event.currentTarget.width / rect.width;
-    const scaleY = event.currentTarget.height / rect.height;
+  const getCanvasPoint = useCallback(
+    (event: ReactMouseEvent<HTMLCanvasElement>) => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const scaleX = event.currentTarget.width / rect.width;
+      const scaleY = event.currentTarget.height / rect.height;
 
-    const canvasX = (event.clientX - rect.left) * scaleX;
-    const canvasY = (event.clientY - rect.top) * scaleY;
+      const canvasX = (event.clientX - rect.left) * scaleX;
+      const canvasY = (event.clientY - rect.top) * scaleY;
 
-    const worldX = (canvasX - offset.x) / zoom;
-    const worldY = (canvasY - offset.y) / zoom;
+      const worldX = (canvasX - offset.x) / zoom;
+      const worldY = (canvasY - offset.y) / zoom;
 
-    return { x: worldX, y: worldY };
-  }, [offset, zoom]);
+      return { x: worldX, y: worldY };
+    },
+    [offset, zoom],
+  );
 
   const getShapeBounds = useCallback((shape: Shape) => {
     if (shape.tool === "pencil" && shape.points && shape.points.length > 0) {
@@ -185,95 +204,124 @@ function App() {
     };
   }, []);
 
-  const hitTestShape = useCallback((shape: Shape, point: Point) => {
-    if (shape.tool === "pencil") {
-      const points = shape.points ?? [];
-      if (points.length > 1) {
-        return points.some((currentPoint, index) => {
-          if (index === 0) return false;
-          return distanceToSegment(point, points[index - 1], currentPoint) <= 8;
-        });
+  const hitTestShape = useCallback(
+    (shape: Shape, point: Point) => {
+      if (shape.tool === "pencil") {
+        const points = shape.points ?? [];
+        if (points.length > 1) {
+          return points.some((currentPoint, index) => {
+            if (index === 0) return false;
+            return (
+              distanceToSegment(point, points[index - 1], currentPoint) <= 8
+            );
+          });
+        }
       }
-    }
 
-    const { minX, minY, maxX, maxY } = getShapeBounds(shape);
+      const { minX, minY, maxX, maxY } = getShapeBounds(shape);
 
-    if (shape.tool === "line" || shape.tool === "arrow") {
-      const start = { x: shape.startX ?? 0, y: shape.startY ?? 0 };
-      const end = { x: shape.endX ?? 0, y: shape.endY ?? 0 };
-      return distanceToSegment(point, start, end) <= 8;
-    }
-
-    if (shape.tool === "circle") {
-      const centerX = (minX + maxX) / 2;
-      const centerY = (minY + maxY) / 2;
-      const radiusX = Math.max((maxX - minX) / 2, 1);
-      const radiusY = Math.max((maxY - minY) / 2, 1);
-      const normalizedX = (point.x - centerX) / radiusX;
-      const normalizedY = (point.y - centerY) / radiusY;
-      return normalizedX * normalizedX + normalizedY * normalizedY <= 1.2;
-    }
-
-    return point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY;
-  }, [getShapeBounds]);
-
-  const findShapeAtPoint = useCallback((point: Point) => {
-    for (let i = shapes.length - 1; i >= 0; i -= 1) {
-      if (hitTestShape(shapes[i], point)) {
-        return shapes[i];
+      if (shape.tool === "line" || shape.tool === "arrow") {
+        const start = { x: shape.startX ?? 0, y: shape.startY ?? 0 };
+        const end = { x: shape.endX ?? 0, y: shape.endY ?? 0 };
+        return distanceToSegment(point, start, end) <= 8;
       }
-    }
-    return null;
-  }, [hitTestShape, shapes]);
 
-  const getHandleAtPoint = useCallback((shape: Shape, point: Point): ResizeHandle | null => {
-    const { minX, minY, maxX, maxY } = getShapeBounds(shape);
-    const handleSize = 8;
-    const handles: Array<{ name: ResizeHandle; x: number; y: number }> = [
-      { name: "nw", x: minX, y: minY },
-      { name: "ne", x: maxX, y: minY },
-      { name: "sw", x: minX, y: maxY },
-      { name: "se", x: maxX, y: maxY },
-    ];
-
-    for (const handle of handles) {
-      if (Math.abs(point.x - handle.x) <= handleSize && Math.abs(point.y - handle.y) <= handleSize) {
-        return handle.name;
+      if (shape.tool === "circle") {
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+        const radiusX = Math.max((maxX - minX) / 2, 1);
+        const radiusY = Math.max((maxY - minY) / 2, 1);
+        const normalizedX = (point.x - centerX) / radiusX;
+        const normalizedY = (point.y - centerY) / radiusY;
+        return normalizedX * normalizedX + normalizedY * normalizedY <= 1.2;
       }
-    }
 
-    return null;
-  }, [getShapeBounds]);
+      return (
+        point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY
+      );
+    },
+    [getShapeBounds],
+  );
 
-  const drawSelectionOutline = useCallback((ctx: CanvasRenderingContext2D, shape: Shape) => {
-    const { minX, minY, maxX, maxY } = getShapeBounds(shape);
-    const width = Math.max(maxX - minX, 1);
-    const height = Math.max(maxY - minY, 1);
+  const findShapeAtPoint = useCallback(
+    (point: Point) => {
+      for (let i = shapes.length - 1; i >= 0; i -= 1) {
+        if (hitTestShape(shapes[i], point)) {
+          return shapes[i];
+        }
+      }
+      return null;
+    },
+    [hitTestShape, shapes],
+  );
 
-    ctx.save();
-    ctx.strokeStyle = "#2563eb";
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([6, 4]);
-    ctx.strokeRect(minX, minY, width, height);
-    ctx.setLineDash([]);
+  const getHandleAtPoint = useCallback(
+    (shape: Shape, point: Point): ResizeHandle | null => {
+      const { minX, minY, maxX, maxY } = getShapeBounds(shape);
+      const handleSize = 8;
+      const handles: Array<{ name: ResizeHandle; x: number; y: number }> = [
+        { name: "nw", x: minX, y: minY },
+        { name: "ne", x: maxX, y: minY },
+        { name: "sw", x: minX, y: maxY },
+        { name: "se", x: maxX, y: maxY },
+      ];
 
-    const handleSize = 6;
-    const handles: Array<{ x: number; y: number }> = [
-      { x: minX, y: minY },
-      { x: maxX, y: minY },
-      { x: minX, y: maxY },
-      { x: maxX, y: maxY },
-    ];
+      for (const handle of handles) {
+        if (
+          Math.abs(point.x - handle.x) <= handleSize &&
+          Math.abs(point.y - handle.y) <= handleSize
+        ) {
+          return handle.name;
+        }
+      }
 
-    handles.forEach(({ x, y }) => {
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(x - handleSize / 2, y - handleSize / 2, handleSize, handleSize);
+      return null;
+    },
+    [getShapeBounds],
+  );
+
+  const drawSelectionOutline = useCallback(
+    (ctx: CanvasRenderingContext2D, shape: Shape) => {
+      const { minX, minY, maxX, maxY } = getShapeBounds(shape);
+      const width = Math.max(maxX - minX, 1);
+      const height = Math.max(maxY - minY, 1);
+
+      ctx.save();
       ctx.strokeStyle = "#2563eb";
-      ctx.strokeRect(x - handleSize / 2, y - handleSize / 2, handleSize, handleSize);
-    });
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(minX, minY, width, height);
+      ctx.setLineDash([]);
 
-    ctx.restore();
-  }, [getShapeBounds]);
+      const handleSize = 6;
+      const handles: Array<{ x: number; y: number }> = [
+        { x: minX, y: minY },
+        { x: maxX, y: minY },
+        { x: minX, y: maxY },
+        { x: maxX, y: maxY },
+      ];
+
+      handles.forEach(({ x, y }) => {
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(
+          x - handleSize / 2,
+          y - handleSize / 2,
+          handleSize,
+          handleSize,
+        );
+        ctx.strokeStyle = "#2563eb";
+        ctx.strokeRect(
+          x - handleSize / 2,
+          y - handleSize / 2,
+          handleSize,
+          handleSize,
+        );
+      });
+
+      ctx.restore();
+    },
+    [getShapeBounds],
+  );
 
   const drawScene = useCallback(() => {
     const canvas = canvasRef.current;
@@ -283,8 +331,6 @@ function App() {
     if (!ctx) return;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#fbbf24";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.save();
     ctx.translate(offset.x, offset.y);
@@ -299,13 +345,34 @@ function App() {
         ctx.fillStyle = "#111827";
         ctx.fillText(shape.text, shape.startX ?? 0, shape.startY ?? 0);
         ctx.restore();
-      } else if (shape.startX !== undefined && shape.startY !== undefined && shape.endX !== undefined && shape.endY !== undefined) {
-        drawshape(shape.tool, ctx, shape.startX, shape.startY, shape.endX, shape.endY, shape.points ?? []);
+      } else if (
+        shape.startX !== undefined &&
+        shape.startY !== undefined &&
+        shape.endX !== undefined &&
+        shape.endY !== undefined
+      ) {
+        drawshape(
+          shape.tool,
+          ctx,
+          shape.startX,
+          shape.startY,
+          shape.endX,
+          shape.endY,
+          shape.points ?? [],
+        );
       }
     });
 
     if (draftShape && draftShape.tool !== "pencil") {
-      drawshape(draftShape.tool, ctx, draftShape.startX ?? 0, draftShape.startY ?? 0, draftShape.endX ?? 0, draftShape.endY ?? 0, draftShape.points ?? []);
+      drawshape(
+        draftShape.tool,
+        ctx,
+        draftShape.startX ?? 0,
+        draftShape.startY ?? 0,
+        draftShape.endX ?? 0,
+        draftShape.endY ?? 0,
+        draftShape.points ?? [],
+      );
     }
 
     if (draftPoints.length > 0) {
@@ -320,35 +387,106 @@ function App() {
     }
 
     ctx.restore();
-  }, [draftPoints, draftShape, drawSelectionOutline, offset, selectedId, shapes, zoom]);
+  }, [
+    draftPoints,
+    draftShape,
+    drawSelectionOutline,
+    offset,
+    selectedId,
+    shapes,
+    zoom,
+  ]);
 
   useEffect(() => {
-    drawScene();
-  }, [drawScene]);
-
-  const zoomAtPoint = useCallback((factor: number, x: number, y: number) => {
-    const nextZoom = getZoomStep(zoom, factor);
-    const worldX = (x - offset.x) / zoom;
-    const worldY = (y - offset.y) / zoom;
-
-    setZoom(nextZoom);
-    setOffset({
-      x: x - worldX * nextZoom,
-      y: y - worldY * nextZoom,
-    });
-  }, [offset, zoom]);
-
-  const updateZoom = useCallback((factor: number, x?: number, y?: number) => {
+    const container = canvasContainerRef.current;
     const canvas = canvasRef.current;
-    if (!canvas) {
-      setZoom((previousZoom) => getZoomStep(previousZoom, factor));
+
+    if (!container || !canvas) {
       return;
     }
 
-    const targetX = x ?? canvas.width / 2;
-    const targetY = y ?? canvas.height / 2;
-    zoomAtPoint(factor, targetX, targetY);
-  }, [zoomAtPoint]);
+    const resizeCanvas = () => {
+      const rect = container.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(rect.width * dpr));
+      const height = Math.max(1, Math.round(rect.height * dpr));
+
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      drawScene();
+    };
+
+    resizeCanvas();
+
+    const resizeObserver = new ResizeObserver(resizeCanvas);
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, [drawScene]);
+
+  useEffect(() => {
+    let active = true;
+
+    const startCamera = async () => {
+      try {
+        const webcamStream = await getWebcamStream();
+
+        if (!active) {
+          webcamStream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
+        setStream(webcamStream);
+      } catch (error) {
+        console.error("Error getting webcam stream:", error);
+      }
+    };
+
+    startCamera();
+
+    return () => {
+      active = false;
+      setStream((currentStream) => {
+        if (currentStream) {
+          currentStream.getTracks().forEach((track) => track.stop());
+        }
+        return null;
+      });
+    };
+  }, []);
+
+  const zoomAtPoint = useCallback(
+    (factor: number, x: number, y: number) => {
+      const nextZoom = getZoomStep(zoom, factor);
+      const worldX = (x - offset.x) / zoom;
+      const worldY = (y - offset.y) / zoom;
+
+      setZoom(nextZoom);
+      setOffset({
+        x: x - worldX * nextZoom,
+        y: y - worldY * nextZoom,
+      });
+    },
+    [offset, zoom],
+  );
+
+  const updateZoom = useCallback(
+    (factor: number, x?: number, y?: number) => {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        setZoom((previousZoom) => getZoomStep(previousZoom, factor));
+        return;
+      }
+
+      const targetX = x ?? canvas.width / 2;
+      const targetY = y ?? canvas.height / 2;
+      zoomAtPoint(factor, targetX, targetY);
+    },
+    [zoomAtPoint],
+  );
 
   const handleMouseDown = (event: ReactMouseEvent<HTMLCanvasElement>) => {
     const point = getCanvasPoint(event);
@@ -457,7 +595,12 @@ function App() {
           }
 
           if (interactionRef.current?.handle) {
-            return resizeShape(shape, interactionRef.current.handle, point, interactionRef.current.shape);
+            return resizeShape(
+              shape,
+              interactionRef.current.handle,
+              point,
+              interactionRef.current.shape,
+            );
           }
 
           return shape;
@@ -481,9 +624,7 @@ function App() {
     if (!draftShape) return;
 
     setDraftShape((current) =>
-      current
-        ? { ...current, endX: point.x, endY: point.y }
-        : current,
+      current ? { ...current, endX: point.x, endY: point.y } : current,
     );
   };
 
@@ -517,37 +658,85 @@ function App() {
 
   return (
     <div className="app-shell">
-      <h2>Canvas</h2>
+      <div className="flex">
+        <div className="flex justify-between gap-40 items-center mt-2">
+          <div id="sketch" className="ml-95 ">
+            <button type="button" onClick={() => setSelectedTool("select")}>
+              Select
+            </button>
+            <button type="button" onClick={() => setSelectedTool("text")}>
+              T
+            </button>
+            <button type="button" onClick={() => setSelectedTool("pencil")}>
+              <BsFillPencilFill style={{ color: "rgb(16, 16, 16)" }} />
+            </button>
+            <button type="button" onClick={() => setSelectedTool("line")}>
+              <MdOutlineHorizontalRule style={{ color: "rgb(16, 16, 16)" }} />
+            </button>
+            <button type="button" onClick={() => setSelectedTool("arrow")}>
+              <FaArrowRightLong style={{ color: "rgb(16, 16, 16)" }} />
+            </button>
+            <button type="button" onClick={() => setSelectedTool("circle")}>
+              <RiCircleLine style={{ color: "rgb(16, 16, 16)" }} />
+            </button>
+            <button type="button" onClick={() => setSelectedTool("rectangle")}>
+              <RiRectangleLine style={{ color: "rgb(16, 16, 16)" }} />
+            </button>
+            <button type="button" onClick={() => setSelectedTool("eraser")}>
+              <RiEraserLine style={{ color: "rgb(16, 16, 16)" }} />
+            </button>
+            <button type="button" onClick={() => setSelectedTool("pan")}>
+              <IoHandLeftOutline style={{ color: "rgb(16, 16, 16)" }} />
+            </button>
+          </div>
 
-      <div className="controls">
-        <button type="button" onClick={() => updateZoom(1.2)}>Zoom in</button>
-        <button type="button" onClick={() => updateZoom(1 / 1.2)}>Zoom out</button>
-        <span>Zoom: {zoom.toFixed(2)}x</span>
+          <div>
+            <button type="button" onClick={() => updateZoom(1.2)}>
+              Zoom in
+            </button>
+            <button type="button" onClick={() => updateZoom(1 / 1.2)}>
+              Zoom out
+            </button>
+            <span>Zoom: {zoom.toFixed(2)}x</span>
+          </div>
+        </div>
       </div>
 
-      <div id="sketch" className="fixed left-4 top-4 z-10 flex flex-col gap-2 bg-white p-2">
-        <button type="button" onClick={() => setSelectedTool("select")}>Select</button>
-        <button type="button" onClick={() => setSelectedTool("text")}>T</button>
-        <button type="button" onClick={() => setSelectedTool("pencil")}><BsFillPencilFill style={{ color: "rgb(16, 16, 16)" }} /></button>
-        <button type="button" onClick={() => setSelectedTool("line")}><MdOutlineHorizontalRule style={{ color: "rgb(16, 16, 16)" }} /></button>
-        <button type="button" onClick={() => setSelectedTool("arrow")}><FaArrowRightLong style={{ color: "rgb(16, 16, 16)" }} /></button>
-        <button type="button" onClick={() => setSelectedTool("circle")}><RiCircleLine style={{ color: "rgb(16, 16, 16)" }} /></button>
-        <button type="button" onClick={() => setSelectedTool("rectangle")}><RiRectangleLine style={{ color: "rgb(16, 16, 16)" }} /></button>
-        <button type="button" onClick={() => setSelectedTool("eraser")}><RiEraserLine style={{ color: "rgb(16, 16, 16)" }} /></button>
-        <button type="button" onClick={() => setSelectedTool("pan")}><IoHandLeftOutline style={{ color: "rgb(16, 16, 16)" }} /></button>
-      </div>
+      <div className="workspace-layout">
+        <div className="video-call-slot" aria-hidden="true">
+          <div className="video-wrap">
+            <video
+              ref={(video) => {
+                if (video && stream && video.srcObject !== stream) {
+                  video.srcObject = stream;
+                }
+              }}
+              autoPlay
+              playsInline
+              muted
+            />
+          </div>
+          <div className="video-label">cam 2</div>
+        </div>
 
-      <canvas
-        id="myCanvas"
-        ref={canvasRef}
-        width="1000"
-        height="880"
-        className={selectedTool === "pan" ? "cursor-grab" : "cursor-crosshair"}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-      />
+        <div className="canvas-panel">
+          <div className="canvas-frame">
+            <div ref={canvasContainerRef} className="canvas-surface">
+              <canvas
+                id="myCanvas"
+                ref={canvasRef}
+                className={
+                  selectedTool === "pan" ? "cursor-grab" : "cursor-crosshair"
+                }
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

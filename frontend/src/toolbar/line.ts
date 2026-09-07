@@ -4,7 +4,7 @@ export default function drawLine(
   startY: number,
   endX: number,
   endY: number,
-  color = "black",
+  color = "#ffffff",
   lineWidth = 3
 ) {
   ctx.beginPath();
