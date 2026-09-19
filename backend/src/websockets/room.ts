@@ -1,0 +1,1 @@
+export const roomcodeHashmap = new Map<number, string>();
