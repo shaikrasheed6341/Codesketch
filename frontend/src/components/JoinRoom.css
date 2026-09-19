@@ -1,0 +1,291 @@
+/* ─── Base Overlay ──────────────────────────────────────────────────────── */
+.jr-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+}
+
+.jr-panel {
+  background: #13131f;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 22px;
+  padding: 36px 32px 32px;
+  width: 440px;
+  max-width: 95vw;
+  box-shadow:
+    0 32px 80px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(99, 102, 241, 0.12);
+  animation: jr-enter 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes jr-enter {
+  from { opacity: 0; transform: translateY(28px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ─── Header ────────────────────────────────────────────────────────────── */
+.jr-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.jr-title {
+  margin: 0 0 4px;
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  letter-spacing: -0.02em;
+}
+
+.jr-subtitle {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+.jr-close {
+  background: none;
+  border: none;
+  color: #475569;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+  line-height: 1;
+}
+.jr-close:hover { color: #e2e8f0; background: rgba(255,255,255,0.06); }
+
+/* ─── Step Indicators ───────────────────────────────────────────────────── */
+.jr-steps {
+  display: flex;
+  align-items: center;
+  margin-bottom: 28px;
+}
+
+.jr-step-item {
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+.jr-step-item:last-child { flex: none; }
+
+.jr-step-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #475569;
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.3s;
+}
+
+.jr-step-dot--active {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.5);
+}
+
+.jr-step-dot--done {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: #10b981;
+  color: #34d399;
+}
+
+.jr-step-line {
+  flex: 1;
+  height: 1px;
+  background: rgba(255,255,255,0.07);
+  margin: 0 8px;
+}
+
+/* ─── Auth Toggle ───────────────────────────────────────────────────────── */
+.jr-toggle {
+  display: flex;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 10px;
+  padding: 3px;
+  margin-bottom: 22px;
+}
+
+.jr-toggle-btn {
+  flex: 1;
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.jr-toggle-btn--active {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+}
+
+/* ─── Form Fields ───────────────────────────────────────────────────────── */
+.jr-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.jr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.jr-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.jr-input {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  padding: 11px 14px;
+  font-size: 0.9rem;
+  color: #e2e8f0;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  width: 100%;
+  box-sizing: border-box;
+}
+.jr-input::placeholder { color: #334155; }
+.jr-input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+.jr-input:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ─── Status Message ────────────────────────────────────────────────────── */
+.jr-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+.jr-message--loading  { background: rgba(99, 102, 241, 0.1); color: #a5b4fc; }
+.jr-message--success  { background: rgba(16, 185, 129, 0.1); color: #6ee7b7; }
+.jr-message--error    { background: rgba(239, 68, 68, 0.1);  color: #fca5a5; }
+.jr-message--idle     { display: none; }
+
+.jr-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(165, 180, 252, 0.25);
+  border-top-color: #a5b4fc;
+  border-radius: 50%;
+  animation: jr-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes jr-spin { to { transform: rotate(360deg); } }
+
+/* ─── Buttons ───────────────────────────────────────────────────────────── */
+.jr-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.jr-btn {
+  padding: 12px;
+  border: none;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.1s, opacity 0.2s, box-shadow 0.2s;
+  width: 100%;
+}
+.jr-btn:active  { transform: scale(0.97); }
+.jr-btn:disabled{ opacity: 0.4; cursor: not-allowed; }
+
+.jr-btn--primary {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
+}
+.jr-btn--primary:hover:not(:disabled) {
+  box-shadow: 0 6px 22px rgba(99, 102, 241, 0.45);
+}
+
+.jr-btn--ghost {
+  background: rgba(255,255,255,0.05);
+  color: #94a3b8;
+  border: 1px solid rgba(255,255,255,0.08);
+  width: auto;
+  padding: 12px 18px;
+  flex-shrink: 0;
+}
+.jr-btn--ghost:hover { background: rgba(255,255,255,0.09); color: #e2e8f0; }
+
+/* ─── Connecting screen ─────────────────────────────────────────────────── */
+.jr-connecting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 30px 0 10px;
+}
+
+.jr-pulse-ring {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 3px solid rgba(99, 102, 241, 0.3);
+  border-top-color: #6366f1;
+  animation: jr-spin 1s linear infinite;
+}
+
+.jr-check {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.15);
+  border: 2px solid #10b981;
+  color: #34d399;
+  font-size: 1.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: jr-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes jr-pop {
+  from { transform: scale(0.5); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+
+.jr-connecting-text {
+  color: #94a3b8;
+  font-size: 0.9rem;
+  text-align: center;
+  margin: 0;
+}

@@ -6,6 +6,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import "./App.css";
+import JoinRoom from "./components/JoinRoom";
 import { getZoomStep } from "./zoomMath";
 import drawshape from "./toolbar/drawshape";
 import { panCanvas } from "./toolbar/pan";
@@ -161,6 +162,7 @@ function App() {
   const [draftPoints, setDraftPoints] = useState<Point[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [showJoinRoom, setShowJoinRoom] = useState(true);
 
   const getCanvasPoint = useCallback(
     (event: ReactMouseEvent<HTMLCanvasElement>) => {
@@ -427,36 +429,22 @@ function App() {
     return () => resizeObserver.disconnect();
   }, [drawScene]);
 
-  useEffect(() => {
-    let active = true;
-
-    const startCamera = async () => {
-      try {
-        const webcamStream = await getWebcamStream();
-
-        if (!active) {
-          webcamStream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-
-        setStream(webcamStream);
-      } catch (error) {
-        console.error("Error getting webcam stream:", error);
-      }
-    };
-
-    startCamera();
-
-    return () => {
-      active = false;
-      setStream((currentStream) => {
-        if (currentStream) {
-          currentStream.getTracks().forEach((track) => track.stop());
-        }
-        return null;
-      });
-    };
+  // Camera starts only after WebSocket connection is established
+  const startCamera = useCallback(async () => {
+    try {
+      const webcamStream = await getWebcamStream();
+      setStream(webcamStream);
+    } catch (error) {
+      console.error("Error getting webcam stream:", error);
+    }
   }, []);
+
+  const handleRoomConnected = useCallback(
+    (_ws: WebSocket, _name: string, _roomcode: string) => {
+      startCamera();
+    },
+    [startCamera],
+  );
 
   const zoomAtPoint = useCallback(
     (factor: number, x: number, y: number) => {
@@ -657,8 +645,8 @@ function App() {
   };
 
   return (
-    <div className="app-shell">
-      <div className="flex">
+    <>
+      <div className="app-shell">
         <div className="flex justify-between gap-40 items-center mt-2">
           <div id="sketch" className="ml-95 ">
             <button type="button" onClick={() => setSelectedTool("select")}>
@@ -699,9 +687,27 @@ function App() {
             </button>
             <span>Zoom: {zoom.toFixed(2)}x</span>
           </div>
+          <div>
+            <button
+              id="open-join-room-btn"
+              type="button"
+              onClick={() => setShowJoinRoom(true)}
+              style={{
+                background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
+                color: "#fff",
+                border: "none",
+                borderRadius: 8,
+                padding: "6px 14px",
+                fontWeight: 600,
+                cursor: "pointer",
+                fontSize: "0.85rem",
+              }}
+            >
+              Join Room
+            </button>
+          </div>
         </div>
       </div>
-
       <div className="workspace-layout">
         <div className="video-call-slot" aria-hidden="true">
           <div className="video-wrap">
@@ -736,8 +742,14 @@ function App() {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </div>  
+    {showJoinRoom && (
+      <JoinRoom
+        onConnected={handleRoomConnected}
+        onClose={() => setShowJoinRoom(false)}
+      />
+    )}
+    </>
   );
 }
 
