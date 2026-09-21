@@ -35,6 +35,83 @@ type Shape = {
   fontSize?: number;
 };
 
+type PresenceUser = {
+  name: string;
+  status: "online" | "offline";
+};
+
+type RoomSocketMessage =
+  | { type: "presence"; users: PresenceUser[] }
+  | { type: "user_joined"; name: string; roomcode: string }
+  | { type: "user_left"; name: string; roomcode: string }
+  | {
+      type: "webrtc_offer";
+      from: string;
+      to: string;
+      roomcode: string;
+      offer: RTCSessionDescriptionInit;
+    }
+  | {
+      type: "webrtc_answer";
+      from: string;
+      to: string;
+      roomcode: string;
+      answer: RTCSessionDescriptionInit;
+    }
+  | {
+      type: "webrtc_ice";
+      from: string;
+      to: string;
+      roomcode: string;
+      candidate: RTCIceCandidateInit;
+    }
+  | {
+      type: "board_lock";
+      from: string;
+      roomcode: string;
+    }
+  | {
+      type: "board_unlock";
+      from: string;
+      roomcode: string;
+    }
+  | {
+      type: "board_draft";
+      from: string;
+      roomcode: string;
+      shape: Shape | null;
+      points: Point[];
+    }
+  | {
+      type: "board_cursor";
+      from: string;
+      roomcode: string;
+      point: Point;
+    }
+  | {
+      type: "board_shape_add";
+      from: string;
+      roomcode: string;
+      shape: Shape;
+    };
+
+type BoardSocketMessage = Extract<
+  RoomSocketMessage,
+  {
+    type:
+      | "board_lock"
+      | "board_unlock"
+      | "board_draft"
+      | "board_cursor"
+      | "board_shape_add";
+  }
+>;
+type BoardOutgoingMessage = BoardSocketMessage extends infer Message
+  ? Message extends BoardSocketMessage
+    ? Omit<Message, "from" | "roomcode">
+    : never
+  : never;
+
 type Interaction = {
   type: "move" | "resize";
   id: string;
@@ -147,6 +224,11 @@ const resizeShape = (
 function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasContainerRef = useRef<HTMLDivElement | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const panStartRef = useRef<{
     x: number;
     y: number;
@@ -160,9 +242,19 @@ function App() {
   const [shapes, setShapes] = useState<Shape[]>([]);
   const [draftShape, setDraftShape] = useState<Shape | null>(null);
   const [draftPoints, setDraftPoints] = useState<Point[]>([]);
+  const [remoteDraftShape, setRemoteDraftShape] = useState<Shape | null>(null);
+  const [remoteDraftPoints, setRemoteDraftPoints] = useState<Point[]>([]);
+  const [remoteCursor, setRemoteCursor] = useState<{ name: string; point: Point } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [remoteName, setRemoteName] = useState("");
   const [showJoinRoom, setShowJoinRoom] = useState(true);
+  const [roomInfo, setRoomInfo] = useState<{ name: string; roomcode: string } | null>(null);
+  const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
+  const [activeDrawer, setActiveDrawer] = useState("");
+  const roomInfoRef = useRef<{ name: string; roomcode: string } | null>(null);
+  const activeDrawerRef = useRef("");
 
   const getCanvasPoint = useCallback(
     (event: ReactMouseEvent<HTMLCanvasElement>) => {
@@ -177,6 +269,23 @@ function App() {
       const worldY = (canvasY - offset.y) / zoom;
 
       return { x: worldX, y: worldY };
+    },
+    [offset, zoom],
+  );
+
+  const getCanvasScreenPoint = useCallback(
+    (point: Point) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return null;
+
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+
+      return {
+        x: (point.x * zoom + offset.x) / scaleX,
+        y: (point.y * zoom + offset.y) / scaleY,
+      };
     },
     [offset, zoom],
   );
@@ -339,7 +448,7 @@ function App() {
     ctx.scale(zoom, zoom);
 
     shapes.forEach((shape) => {
-      if (shape.tool === "pencil" && shape.points) {
+      if ((shape.tool === "pencil" || shape.tool === "eraser") && shape.points) {
         drawshape(shape.tool, ctx, 0, 0, 0, 0, shape.points);
       } else if (shape.tool === "text" && shape.text) {
         ctx.save();
@@ -378,7 +487,23 @@ function App() {
     }
 
     if (draftPoints.length > 0) {
-      drawshape("pencil", ctx, 0, 0, 0, 0, draftPoints);
+      drawshape(selectedTool === "eraser" ? "eraser" : "pencil", ctx, 0, 0, 0, 0, draftPoints);
+    }
+
+    if (remoteDraftShape && remoteDraftShape.tool !== "pencil") {
+      drawshape(
+        remoteDraftShape.tool,
+        ctx,
+        remoteDraftShape.startX ?? 0,
+        remoteDraftShape.startY ?? 0,
+        remoteDraftShape.endX ?? 0,
+        remoteDraftShape.endY ?? 0,
+        remoteDraftShape.points ?? [],
+      );
+    }
+
+    if (remoteDraftPoints.length > 0) {
+      drawshape(remoteDraftShape?.tool === "eraser" ? "eraser" : "pencil", ctx, 0, 0, 0, 0, remoteDraftPoints);
     }
 
     if (selectedId) {
@@ -392,6 +517,8 @@ function App() {
   }, [
     draftPoints,
     draftShape,
+    remoteDraftPoints,
+    remoteDraftShape,
     drawSelectionOutline,
     offset,
     selectedId,
@@ -431,20 +558,274 @@ function App() {
 
   // Camera starts only after WebSocket connection is established
   const startCamera = useCallback(async () => {
-    try {
-      const webcamStream = await getWebcamStream();
-      setStream(webcamStream);
-    } catch (error) {
-      console.error("Error getting webcam stream:", error);
+    if (localStreamRef.current) {
+      return localStreamRef.current;
+    }
+
+    const webcamStream = await getWebcamStream();
+    localStreamRef.current = webcamStream;
+    setStream(webcamStream);
+    return webcamStream;
+  }, []);
+
+  const sendRoomMessage = useCallback((message: RoomSocketMessage) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(message));
     }
   }, []);
 
+  const sendBoardMessage = useCallback(
+    (message: BoardOutgoingMessage) => {
+      const currentRoom = roomInfoRef.current;
+      if (!currentRoom) return;
+
+      sendRoomMessage({
+        ...message,
+        from: currentRoom.name,
+        roomcode: currentRoom.roomcode,
+      } as BoardSocketMessage);
+    },
+    [sendRoomMessage],
+  );
+
+  const getPeerConnection = useCallback(
+    (peerName: string, localStream: MediaStream) => {
+      const existingPeer = peersRef.current.get(peerName);
+      if (existingPeer) {
+        return existingPeer;
+      }
+
+      const peer = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+
+      localStream.getTracks().forEach((track) => {
+        peer.addTrack(track, localStream);
+      });
+
+      peer.addEventListener("track", (event) => {
+        const [incomingStream] = event.streams;
+        if (incomingStream) {
+          setRemoteStream(incomingStream);
+          setRemoteName(peerName);
+        }
+      });
+
+      peer.addEventListener("icecandidate", (event) => {
+        const currentRoom = roomInfoRef.current;
+        if (!event.candidate || !currentRoom) return;
+
+        sendRoomMessage({
+          type: "webrtc_ice",
+          from: currentRoom.name,
+          to: peerName,
+          roomcode: currentRoom.roomcode,
+          candidate: event.candidate.toJSON(),
+        });
+      });
+
+      peer.addEventListener("connectionstatechange", () => {
+        if (["closed", "failed", "disconnected"].includes(peer.connectionState)) {
+          peersRef.current.delete(peerName);
+          setRemoteStream((currentStream) => {
+            if (remoteName === peerName) {
+              setRemoteName("");
+              return null;
+            }
+            return currentStream;
+          });
+        }
+      });
+
+      peersRef.current.set(peerName, peer);
+      return peer;
+    },
+    [remoteName, sendRoomMessage],
+  );
+
+  const callPeer = useCallback(
+    async (peerName: string) => {
+      const currentRoom = roomInfoRef.current;
+      if (!currentRoom || peerName === currentRoom.name) return;
+
+      const localStream = await startCamera();
+      const peer = getPeerConnection(peerName, localStream);
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+
+      sendRoomMessage({
+        type: "webrtc_offer",
+        from: currentRoom.name,
+        to: peerName,
+        roomcode: currentRoom.roomcode,
+        offer,
+      });
+    },
+    [getPeerConnection, sendRoomMessage, startCamera],
+  );
+
   const handleRoomConnected = useCallback(
-    (_ws: WebSocket, _name: string, _roomcode: string) => {
-      startCamera();
+    (ws: WebSocket, name: string, roomcode: string) => {
+      const nextRoomInfo = { name, roomcode };
+      wsRef.current = ws;
+      roomInfoRef.current = nextRoomInfo;
+      setRoomInfo(nextRoomInfo);
+      setPresenceUsers([{ name, status: "online" }]);
+      startCamera().catch((error) => {
+        console.error("Error getting webcam stream:", error);
+      });
     },
     [startCamera],
   );
+
+  const handlePresence = useCallback((users: PresenceUser[]) => {
+    setPresenceUsers((currentUsers) => {
+      const onlineUsers = new Map(users.map((user) => [user.name, user]));
+      const knownNames = new Set([
+        ...currentUsers.map((user) => user.name),
+        ...users.map((user) => user.name),
+      ]);
+
+      return Array.from(knownNames).map((name) => {
+        const onlineUser = onlineUsers.get(name);
+        return onlineUser ?? { name, status: "offline" };
+      });
+    });
+  }, []);
+
+  const handleRoomMessage = useCallback(
+    async (event: RoomSocketMessage) => {
+      const currentRoom = roomInfoRef.current;
+
+      if (event.type === "presence") {
+        handlePresence(event.users);
+        return;
+      }
+
+      if (!currentRoom) return;
+
+      if ("roomcode" in event && event.roomcode !== currentRoom.roomcode) return;
+
+      if (event.type === "board_lock" && event.from !== currentRoom.name) {
+        activeDrawerRef.current = event.from;
+        setActiveDrawer(event.from);
+        return;
+      }
+
+      if (event.type === "board_unlock" && event.from !== currentRoom.name) {
+        activeDrawerRef.current = "";
+        setActiveDrawer("");
+        setRemoteDraftShape(null);
+        setRemoteDraftPoints([]);
+        setRemoteCursor(null);
+        return;
+      }
+
+      if (event.type === "board_draft" && event.from !== currentRoom.name) {
+        activeDrawerRef.current = event.from;
+        setActiveDrawer(event.from);
+        setRemoteDraftShape(event.shape);
+        setRemoteDraftPoints(event.points);
+        return;
+      }
+
+      if (event.type === "board_cursor" && event.from !== currentRoom.name) {
+        activeDrawerRef.current = event.from;
+        setActiveDrawer(event.from);
+        setRemoteCursor({ name: event.from, point: event.point });
+        return;
+      }
+
+      if (event.type === "board_shape_add" && event.from !== currentRoom.name) {
+        setShapes((currentShapes) => {
+          if (currentShapes.some((shape) => shape.id === event.shape.id)) {
+            return currentShapes;
+          }
+          return [...currentShapes, event.shape];
+        });
+        setRemoteDraftShape(null);
+        setRemoteDraftPoints([]);
+        setRemoteCursor(null);
+        activeDrawerRef.current = "";
+        setActiveDrawer("");
+        return;
+      }
+
+      if (event.type === "user_joined" && event.name !== currentRoom.name) {
+        await callPeer(event.name);
+        return;
+      }
+
+      if (event.type === "user_left") {
+        const peer = peersRef.current.get(event.name);
+        peer?.close();
+        peersRef.current.delete(event.name);
+        if (remoteName === event.name) {
+          setRemoteName("");
+          setRemoteStream(null);
+        }
+        if (activeDrawerRef.current === event.name) {
+          activeDrawerRef.current = "";
+          setActiveDrawer("");
+          setRemoteDraftShape(null);
+          setRemoteDraftPoints([]);
+          setRemoteCursor(null);
+        }
+        return;
+      }
+
+      if (!("to" in event) || event.to !== currentRoom.name) return;
+
+      if (event.type === "webrtc_offer") {
+        const localStream = await startCamera();
+        const peer = getPeerConnection(event.from, localStream);
+        await peer.setRemoteDescription(new RTCSessionDescription(event.offer));
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+
+        sendRoomMessage({
+          type: "webrtc_answer",
+          from: currentRoom.name,
+          to: event.from,
+          roomcode: currentRoom.roomcode,
+          answer,
+        });
+        return;
+      }
+
+      if (event.type === "webrtc_answer") {
+        const peer = peersRef.current.get(event.from);
+        if (peer) {
+          await peer.setRemoteDescription(new RTCSessionDescription(event.answer));
+        }
+        return;
+      }
+
+      if (event.type === "webrtc_ice") {
+        const peer = peersRef.current.get(event.from);
+        if (peer) {
+          await peer.addIceCandidate(new RTCIceCandidate(event.candidate));
+        }
+      }
+    },
+    [callPeer, getPeerConnection, handlePresence, remoteName, sendRoomMessage, startCamera],
+  );
+
+  useEffect(() => {
+    if (localVideoRef.current && stream && localVideoRef.current.srcObject !== stream) {
+      localVideoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  useEffect(() => {
+    if (
+      remoteVideoRef.current &&
+      remoteStream &&
+      remoteVideoRef.current.srcObject !== remoteStream
+    ) {
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
 
   const zoomAtPoint = useCallback(
     (factor: number, x: number, y: number) => {
@@ -476,7 +857,34 @@ function App() {
     [zoomAtPoint],
   );
 
+  const canDrawOnBoard = () => {
+    const currentRoom = roomInfoRef.current;
+    return !activeDrawerRef.current || activeDrawerRef.current === currentRoom?.name;
+  };
+
+  const lockBoardForMe = () => {
+    const currentRoom = roomInfoRef.current;
+    if (!currentRoom) return;
+
+    activeDrawerRef.current = currentRoom.name;
+    setActiveDrawer(currentRoom.name);
+    sendBoardMessage({ type: "board_lock" });
+  };
+
+  const unlockBoardForMe = () => {
+    const currentRoom = roomInfoRef.current;
+    if (!currentRoom) return;
+
+    activeDrawerRef.current = "";
+    setActiveDrawer("");
+    sendBoardMessage({ type: "board_unlock" });
+  };
+
   const handleMouseDown = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+    if (!canDrawOnBoard()) {
+      return;
+    }
+
     const point = getCanvasPoint(event);
 
     if (selectedTool === "pan") {
@@ -489,10 +897,14 @@ function App() {
       return;
     }
 
+    lockBoardForMe();
+    sendBoardMessage({ type: "board_cursor", point });
+
     if (selectedTool === "select") {
       const hitShape = findShapeAtPoint(point);
       if (!hitShape) {
         setSelectedId(null);
+        unlockBoardForMe();
         return;
       }
 
@@ -510,8 +922,15 @@ function App() {
       return;
     }
 
-    if (selectedTool === "pencil") {
+    if (selectedTool === "pencil" || selectedTool === "eraser") {
       setDraftPoints([point]);
+      if (selectedTool === "eraser") {
+        sendBoardMessage({
+          type: "board_draft",
+          shape: { id: makeShapeId(), tool: "eraser", points: [point] },
+          points: [point],
+        });
+      }
       return;
     }
 
@@ -522,17 +941,17 @@ function App() {
       }
 
       const nextText = textValue.trim();
-      setShapes((current) => [
-        ...current,
-        {
-          id: makeShapeId(),
-          tool: "text",
-          startX: point.x,
-          startY: point.y,
-          text: nextText,
-          fontSize: 24,
-        },
-      ]);
+      const nextShape = {
+        id: makeShapeId(),
+        tool: "text",
+        startX: point.x,
+        startY: point.y,
+        text: nextText,
+        fontSize: 24,
+      };
+      setShapes((current) => [...current, nextShape]);
+      sendBoardMessage({ type: "board_shape_add", shape: nextShape });
+      unlockBoardForMe();
       return;
     }
 
@@ -540,14 +959,16 @@ function App() {
       setSelectedId(null);
     }
 
-    setDraftShape({
+    const nextDraftShape = {
       id: makeShapeId(),
       tool: selectedTool,
       startX: point.x,
       startY: point.y,
       endX: point.x,
       endY: point.y,
-    });
+    };
+    setDraftShape(nextDraftShape);
+    sendBoardMessage({ type: "board_draft", shape: nextDraftShape, points: [] });
   };
 
   const handleMouseMove = (event: ReactMouseEvent<HTMLCanvasElement>) => {
@@ -567,6 +988,9 @@ function App() {
     }
 
     const point = getCanvasPoint(event);
+    if (activeDrawerRef.current === roomInfoRef.current?.name) {
+      sendBoardMessage({ type: "board_cursor", point });
+    }
 
     if (selectedTool === "select" && interactionRef.current) {
       const deltaX = point.x - interactionRef.current.startX;
@@ -603,18 +1027,31 @@ function App() {
       return;
     }
 
-    if (selectedTool === "pencil") {
+    if (selectedTool === "pencil" || selectedTool === "eraser") {
       if (draftPoints.length === 0) return;
-      setDraftPoints((current) => [...current, point]);
+      const nextPoints = [...draftPoints, point];
+      setDraftPoints(nextPoints);
+      sendBoardMessage({
+        type: "board_draft",
+        shape:
+          selectedTool === "eraser"
+            ? { id: makeShapeId(), tool: "eraser", points: nextPoints }
+            : null,
+        points: nextPoints,
+      });
       return;
     }
 
     if (!draftShape) return;
 
-    setDraftShape((current) =>
-      current ? { ...current, endX: point.x, endY: point.y } : current,
-    );
+    const nextDraftShape = { ...draftShape, endX: point.x, endY: point.y };
+    setDraftShape(nextDraftShape);
+    sendBoardMessage({ type: "board_draft", shape: nextDraftShape, points: [] });
   };
+
+  const remoteCursorPosition = remoteCursor
+    ? getCanvasScreenPoint(remoteCursor.point)
+    : null;
 
   const handleMouseUp = () => {
     if (selectedTool === "pan") {
@@ -624,31 +1061,37 @@ function App() {
 
     if (selectedTool === "select") {
       interactionRef.current = null;
+      unlockBoardForMe();
       return;
     }
 
-    if (selectedTool === "pencil") {
+    if (selectedTool === "pencil" || selectedTool === "eraser") {
       if (draftPoints.length > 0) {
-        setShapes((current) => [
-          ...current,
-          { id: makeShapeId(), tool: "pencil", points: draftPoints },
-        ]);
+        const nextShape = { id: makeShapeId(), tool: selectedTool, points: draftPoints };
+        setShapes((current) => [...current, nextShape]);
+        sendBoardMessage({ type: "board_shape_add", shape: nextShape });
       }
       setDraftPoints([]);
+      unlockBoardForMe();
       return;
     }
 
-    if (!draftShape) return;
+    if (!draftShape) {
+      unlockBoardForMe();
+      return;
+    }
 
     setShapes((current) => [...current, draftShape]);
+    sendBoardMessage({ type: "board_shape_add", shape: draftShape });
     setDraftShape(null);
+    unlockBoardForMe();
   };
 
   return (
     <>
       <div className="app-shell">
-        <div className="flex justify-between gap-40 items-center mt-2">
-          <div id="sketch" className="ml-95 ">
+        <div className="topbar">
+          <div id="sketch" className="tool-strip">
             <button type="button" onClick={() => setSelectedTool("select")}>
               Select
             </button>
@@ -678,7 +1121,7 @@ function App() {
             </button>
           </div>
 
-          <div>
+          <div className="zoom-controls">
             <button type="button" onClick={() => updateZoom(1.2)}>
               Zoom in
             </button>
@@ -709,30 +1152,73 @@ function App() {
         </div>
       </div>
       <div className="workspace-layout">
-        <div className="video-call-slot" aria-hidden="true">
+        <div className="video-call-slot">
+          <div className="video-grid">
           <div className="video-wrap">
             <video
-              ref={(video) => {
-                if (video && stream && video.srcObject !== stream) {
-                  video.srcObject = stream;
-                }
-              }}
+              ref={localVideoRef}
               autoPlay
               playsInline
               muted
             />
+            <div className="video-label">{roomInfo?.name ?? "You"}</div>
           </div>
-          <div className="video-label">cam 2</div>
+          <div className="video-wrap">
+            {remoteStream ? (
+              <video ref={remoteVideoRef} autoPlay playsInline />
+            ) : (
+              <div className="video-placeholder">Waiting for user 2</div>
+            )}
+            <div className="video-label">{remoteName || "cam 2"}</div>
+          </div>
+          </div>
+          <div className="presence-panel">
+            <div className="presence-header">
+              <span>Room</span>
+              <strong>{roomInfo?.roomcode ?? "Not joined"}</strong>
+            </div>
+            <div className="presence-list">
+              {presenceUsers.length > 0 ? (
+                presenceUsers.map((user) => (
+                  <div className="presence-row" key={user.name}>
+                    <span className={`presence-dot presence-dot--${user.status}`} />
+                    <span className="presence-name">{user.name}</span>
+                    <span className="presence-status">{user.status}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="presence-empty">No one online yet</div>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="canvas-panel">
+          {activeDrawer && activeDrawer !== roomInfo?.name && (
+            <div className="board-lock-banner">{activeDrawer} is drawing</div>
+          )}
           <div className="canvas-frame">
             <div ref={canvasContainerRef} className="canvas-surface">
+              {remoteCursor && remoteCursorPosition && (
+                <div
+                  className="remote-cursor"
+                  style={{
+                    transform: `translate(${remoteCursorPosition.x}px, ${remoteCursorPosition.y}px)`,
+                  }}
+                >
+                  <span className="remote-cursor__pointer" />
+                  <span className="remote-cursor__name">{remoteCursor.name}</span>
+                </div>
+              )}
               <canvas
                 id="myCanvas"
                 ref={canvasRef}
                 className={
-                  selectedTool === "pan" ? "cursor-grab" : "cursor-crosshair"
+                  !canDrawOnBoard()
+                    ? "cursor-locked"
+                    : selectedTool === "pan"
+                    ? "cursor-grab"
+                    : "cursor-crosshair"
                 }
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
@@ -746,6 +1232,14 @@ function App() {
     {showJoinRoom && (
       <JoinRoom
         onConnected={handleRoomConnected}
+        onPresence={handlePresence}
+        onMessage={(raw) => {
+          try {
+            handleRoomMessage(JSON.parse(raw) as RoomSocketMessage);
+          } catch {
+            console.warn("[WS] Ignored invalid message", raw);
+          }
+        }}
         onClose={() => setShowJoinRoom(false)}
       />
     )}

@@ -1,7 +1,5 @@
 import { WEBSOCKET_URL } from "../utils/apiurl.ts";
 
-let pingInterval: ReturnType<typeof setInterval> | undefined;
-
 /**
  * Opens a WebSocket connection.
  * Call this ONLY after the backend has validated roomcode + username.
@@ -12,6 +10,7 @@ export function connectWebSocket(
   onMessage?: (data: string) => void
 ): WebSocket {
   const ws = new WebSocket(WEBSOCKET_URL);
+  let pingInterval: ReturnType<typeof setInterval> | undefined;
 
   ws.addEventListener("open", () => {
     console.log("[WS] Connected");
@@ -33,12 +32,12 @@ export function connectWebSocket(
 
   ws.addEventListener("close", () => {
     console.log("[WS] Disconnected");
-    clearInterval(pingInterval);
+    if (pingInterval) clearInterval(pingInterval);
   });
 
   ws.addEventListener("error", () => {
     console.error("[WS] Error");
-    clearInterval(pingInterval);
+    if (pingInterval) clearInterval(pingInterval);
   });
 
   // Reconnect on bfcache restore (back-forward navigation)

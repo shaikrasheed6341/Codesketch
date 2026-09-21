@@ -9,13 +9,20 @@ type AuthMode = "signin" | "signup";
 type RoomMode = "join" | "create";
 type Status = "idle" | "loading" | "error" | "success";
 
+type PresenceUser = {
+  name: string;
+  status: "online" | "offline";
+};
+
 interface JoinRoomProps {
   onConnected?: (ws: WebSocket, name: string, roomcode: string) => void;
+  onPresence?: (users: PresenceUser[]) => void;
+  onMessage?: (raw: string) => void;
   onClose?: () => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export default function JoinRoom({ onConnected, onClose }: JoinRoomProps) {
+export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }: JoinRoomProps) {
   // Step navigation
   const [step, setStep] = useState<Step>("auth");
   const [authMode, setAuthMode] = useState<AuthMode>("signin");
@@ -177,7 +184,17 @@ export default function JoinRoom({ onConnected, onClose }: JoinRoomProps) {
     setStatus("loading");
     setMessage("Opening connection...");
 
-    const ws = connectWebSocket(roomcode, loggedInName, () => {});
+    const ws = connectWebSocket(roomcode, loggedInName, (raw) => {
+      onMessage?.(raw);
+      try {
+        const event = JSON.parse(raw);
+        if (event.type === "presence" && Array.isArray(event.users)) {
+          onPresence?.(event.users);
+        }
+      } catch {
+        console.warn("[WS] Ignored invalid message", raw);
+      }
+    });
     wsRef.current = ws;
 
     ws.addEventListener("open", () => {

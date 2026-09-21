@@ -42,8 +42,8 @@ export default function drawshape(
     rectangle(ctx, startX, startY, endX, endY);
   } else if (selectedTool === 'pencil') {
     drawPencilStroke(ctx, points);
-  }else if (selectedTool === 'eraser') {
-    drawEraser(ctx, startX, startY);
+  } else if (selectedTool === 'eraser') {
+    drawEraser(ctx, startX, startY, points);
   }else if(selectedTool === 'pan'){
     panCanvas(startX, startY, endX, endY);
   }
