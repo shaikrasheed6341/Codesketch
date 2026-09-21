@@ -1,1 +1,1 @@
-export const roomcodeHashmap = new Map<number, string>();
+export const roomcodeHashmap = new Map<string, string>();

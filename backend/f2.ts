@@ -1,4 +1,4 @@
-export async function f2(roomcodeHashmap: Map<number, string>) {
+export async function f2(roomcodeHashmap: Map<string, string>) {
     console.log("called f2 function");
 
     console.log("the result:", roomcodeHashmap);
@@ -8,4 +8,4 @@ export async function f2(roomcodeHashmap: Map<number, string>) {
         console.log("value:",value);
     });
      
-    }
+}

@@ -41,6 +41,7 @@ wss.on("connection", (ws: WebSocket) => {
           roomcode: codeStr,
           name,
         }, ws);
+        broadcastPresence(codeStr);
       } else if (data.type === "ping") {
         ws.send(JSON.stringify({ type: "pong" }));
       } else if (data.roomcode) {
@@ -69,6 +70,7 @@ wss.on("connection", (ws: WebSocket) => {
         roomcode,
         name,
       });
+      broadcastPresence(roomcode);
     }
   });
 
@@ -87,4 +89,27 @@ function broadcastToRoom(roomcode: string, payload: unknown, excludeWs?: WebSock
       client.send(msg);
     }
   }
+}
+
+function getPresence(roomcode: string) {
+  const clients = roomClients.get(roomcode);
+  if (!clients) return [];
+
+  const names = new Set<string>();
+  for (const client of clients) {
+    const meta = clientMeta.get(client);
+    if (meta && client.readyState === WebSocket.OPEN) {
+      names.add(meta.name);
+    }
+  }
+
+  return Array.from(names).map((name) => ({ name, status: "online" }));
+}
+
+function broadcastPresence(roomcode: string) {
+  broadcastToRoom(roomcode, {
+    type: "presence",
+    roomcode,
+    users: getPresence(roomcode),
+  });
 }

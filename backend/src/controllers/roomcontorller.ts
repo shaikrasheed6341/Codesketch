@@ -7,25 +7,28 @@ import { f2 } from "../../f2.js";
  import {roomcodeHashmap}  from "../websockets/room.js";
 export async function createroom(req:Request , res:Response ) {
     const {name , description , roomcode , active = true} = req.body;
+    const normalizedRoomcode = Number(roomcode);
+    const roomcodeKey = String(roomcode).trim();
 
     try{
-        if(!name || !description || !roomcode){
+        if(!name || !description || !roomcodeKey || Number.isNaN(normalizedRoomcode)){
             return res.status(411).json({success:false,message:"Please provide all the required fields"})
+        }
+        const existingRoom = await db.select().from(room).where(eq(room.roomcode, normalizedRoomcode));
+        if(existingRoom[0] || roomcodeHashmap.has(roomcodeKey)){
+            return res.status(411).json({success:false,message:"Room code already exists"})
         }
         const createroom = await db.insert(room).values({
             name,
             description,
-            roomcode,
+            roomcode: normalizedRoomcode,
             active
         })
-            if(roomcodeHashmap.get(roomcode)){
-                return res.status(411).json({success:false,message:"Room code already exists"})
-            }
-             roomcodeHashmap.set(roomcode,name);
+             roomcodeHashmap.set(roomcodeKey,name);
             console.log(roomcodeHashmap);
             f2(roomcodeHashmap)
               
-        return res.status(200).json({success:true,message:"Room created successfully",data:JSON.stringify(roomcodeHashmap)})
+        return res.status(200).json({success:true,message:"Room created successfully",roomcode: roomcodeKey,data:createroom})
     }catch(e){
         return res.json({success:false,message:`${e}`})
     }
@@ -43,8 +46,13 @@ export async function  activeroomcode(req:Request , res:Response){
 export async function validatingroomcode(req:Request ,res:Response ){
    
     const{roomcode,name} = req.body;
+    const normalizedRoomcode = Number(roomcode);
+    const roomcodeKey = String(roomcode).trim();
     try{
-       const checkroom = await db.select().from(room).where(eq(room.roomcode,roomcode));
+       if(!roomcodeKey || Number.isNaN(normalizedRoomcode)){
+        return res.status(411).json({success:false,message:"Please provide valid room code"})
+       }
+       const checkroom = await db.select().from(room).where(eq(room.roomcode,normalizedRoomcode));
        const validateuser = await db.select().from(user).where(eq(user.name,name)); 
        if(!checkroom[0]){
         return res.status(411).json({success:false,message:"Please provide valid room code"})
@@ -53,11 +61,12 @@ export async function validatingroomcode(req:Request ,res:Response ){
         return res.status(411).json({success:false,message:"Please provide valid username"})
        }
        const extractname = validateuser[0].name;
-     if(!roomcodeHashmap.has(roomcode)){
+     if(!checkroom[0].active && !roomcodeHashmap.has(roomcodeKey)){
         return res.status(411).json({success:false,message:"Room code is not active"})
      }
-       f1(roomcode,extractname);
-       return res.status(200).json({success:true,message:"Room code validated successfully",roomcode , extractname});
+       roomcodeHashmap.set(roomcodeKey, checkroom[0].name);
+       f1(roomcodeKey,extractname);
+       return res.status(200).json({success:true,message:"Room code validated successfully",roomcode: roomcodeKey , extractname});
 
     }catch(e){
         return res.json({success:false,message:`${e}`})
