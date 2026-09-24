@@ -7,6 +7,7 @@ import {
 } from "react";
 import "./App.css";
 import JoinRoom from "./components/JoinRoom";
+import LandingPage from "./components/LandingPage";
 import { getZoomStep } from "./zoomMath";
 import drawshape from "./toolbar/drawshape";
 import { panCanvas } from "./toolbar/pan";
@@ -16,29 +17,17 @@ import { FaArrowRightLong } from "react-icons/fa6";
 import { RiCircleLine, RiEraserLine, RiRectangleLine } from "react-icons/ri";
 import { IoHandLeftOutline } from "react-icons/io5";
 import { getWebcamStream } from "./webcam";
-type Point = {
-  x: number;
-  y: number;
-};
-
-type ResizeHandle = "nw" | "ne" | "sw" | "se";
-
-type Shape = {
-  id: string;
-  tool: string;
-  startX?: number;
-  startY?: number;
-  endX?: number;
-  endY?: number;
-  points?: Point[];
-  text?: string;
-  fontSize?: number;
-};
-
-type PresenceUser = {
-  name: string;
-  status: "online" | "offline";
-};
+import { BACKEND_URL } from "./utils/apiurl";
+import { distanceToSegment, moveShape, resizeShape } from "./board/geometry";
+import type {
+  AuthUser,
+  Interaction,
+  Point,
+  PresenceUser,
+  ResizeHandle,
+  Shape,
+  TextEditor,
+} from "./board/types";
 
 type RoomSocketMessage =
   | { type: "presence"; users: PresenceUser[] }
@@ -93,6 +82,20 @@ type RoomSocketMessage =
       from: string;
       roomcode: string;
       shape: Shape;
+      canvasId: number;
+    }
+  | {
+      type: "board_state";
+      roomcode: string;
+      canvasId: number;
+      shapes: Shape[];
+    }
+  | {
+      type: "board_sync";
+      from: string;
+      roomcode: string;
+      canvasId: number;
+      shapes: Shape[];
     };
 
 type BoardSocketMessage = Extract<
@@ -103,7 +106,8 @@ type BoardSocketMessage = Extract<
       | "board_unlock"
       | "board_draft"
       | "board_cursor"
-      | "board_shape_add";
+      | "board_shape_add"
+      | "board_sync";
   }
 >;
 type BoardOutgoingMessage = BoardSocketMessage extends infer Message
@@ -112,114 +116,8 @@ type BoardOutgoingMessage = BoardSocketMessage extends infer Message
     : never
   : never;
 
-type Interaction = {
-  type: "move" | "resize";
-  id: string;
-  startX: number;
-  startY: number;
-  shape: Shape;
-  handle?: ResizeHandle;
-};
-
 const makeShapeId = () =>
   `shape-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-const distanceToSegment = (point: Point, a: Point, b: Point) => {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const lengthSquared = dx * dx + dy * dy;
-
-  if (lengthSquared === 0) {
-    return Math.hypot(point.x - a.x, point.y - a.y);
-  }
-
-  const projection =
-    ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared;
-  const clamped = Math.max(0, Math.min(1, projection));
-  const closestX = a.x + clamped * dx;
-  const closestY = a.y + clamped * dy;
-
-  return Math.hypot(point.x - closestX, point.y - closestY);
-};
-
-const moveShape = (shape: Shape, dx: number, dy: number): Shape => {
-  if (shape.tool === "pencil" && shape.points) {
-    return {
-      ...shape,
-      points: shape.points.map((point) => ({
-        x: point.x + dx,
-        y: point.y + dy,
-      })),
-    };
-  }
-
-  return {
-    ...shape,
-    startX: (shape.startX ?? 0) + dx,
-    startY: (shape.startY ?? 0) + dy,
-    endX: (shape.endX ?? 0) + dx,
-    endY: (shape.endY ?? 0) + dy,
-  };
-};
-
-
-
-const resizeShape = (
-  shape: Shape,
-  handle: ResizeHandle,
-  pointer: Point,
-  original: Shape,
-): Shape => {
-  const startX = original.startX ?? 0;
-  const startY = original.startY ?? 0;
-  const endX = original.endX ?? 0;
-  const endY = original.endY ?? 0;
-
-  const minX = Math.min(startX, endX);
-  const minY = Math.min(startY, endY);
-  const maxX = Math.max(startX, endX);
-  const maxY = Math.max(startY, endY);
-
-  let nextMinX = minX;
-  let nextMinY = minY;
-  let nextMaxX = maxX;
-  let nextMaxY = maxY;
-
-  if (handle.includes("w")) nextMinX = pointer.x;
-  if (handle.includes("e")) nextMaxX = pointer.x;
-  if (handle.includes("n")) nextMinY = pointer.y;
-  if (handle.includes("s")) nextMaxY = pointer.y;
-
-  if (shape.tool === "line" || shape.tool === "arrow") {
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
-    const width = Math.max(maxX - minX, 1);
-    const height = Math.max(maxY - minY, 1);
-    const scaleX = Math.max(0.1, (nextMaxX - nextMinX) / width);
-    const scaleY = Math.max(0.1, (nextMaxY - nextMinY) / height);
-
-    const nextStartX = centerX + (startX - centerX) * scaleX;
-    const nextStartY = centerY + (startY - centerY) * scaleY;
-    const nextEndX = centerX + (endX - centerX) * scaleX;
-    const nextEndY = centerY + (endY - centerY) * scaleY;
-
-    return {
-      ...shape,
-      startX: nextStartX,
-      startY: nextStartY,
-      endX: nextEndX,
-      endY: nextEndY,
-    };
-  }
-
-  return {
-    ...shape,
-    startX: nextMinX,
-    startY: nextMinY,
-    endX: nextMaxX,
-    endY: nextMaxY,
-  };
-};
 
 function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -238,23 +136,111 @@ function App() {
   const interactionRef = useRef<Interaction | null>(null);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [selectedTool, setSelectedTool] = useState("draw");
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const [canvasDisplaySize, setCanvasDisplaySize] = useState({ width: 0, height: 0 });
+  const [selectedTool, setSelectedTool] = useState("pencil");
   const [shapes, setShapes] = useState<Shape[]>([]);
+  const [activeCanvasId, setActiveCanvasId] = useState(0);
+  const [canvasIds, setCanvasIds] = useState<number[]>([0]);
+  const canvasStatesRef = useRef<Map<number, Shape[]>>(new Map([[0, []]]));
   const [draftShape, setDraftShape] = useState<Shape | null>(null);
   const [draftPoints, setDraftPoints] = useState<Point[]>([]);
   const [remoteDraftShape, setRemoteDraftShape] = useState<Shape | null>(null);
   const [remoteDraftPoints, setRemoteDraftPoints] = useState<Point[]>([]);
   const [remoteCursor, setRemoteCursor] = useState<{ name: string; point: Point } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [textEditor, setTextEditor] = useState<TextEditor | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [remoteName, setRemoteName] = useState("");
-  const [showJoinRoom, setShowJoinRoom] = useState(true);
+  const [showJoinRoom, setShowJoinRoom] = useState(false);
   const [roomInfo, setRoomInfo] = useState<{ name: string; roomcode: string } | null>(null);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
   const [activeDrawer, setActiveDrawer] = useState("");
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const roomInfoRef = useRef<{ name: string; roomcode: string } | null>(null);
   const activeDrawerRef = useRef("");
+
+  const updateShapes = useCallback((updater: Shape[] | ((current: Shape[]) => Shape[])) => {
+    setShapes((current) => {
+      const next = typeof updater === "function" ? updater(current) : updater;
+      canvasStatesRef.current.set(activeCanvasId, next);
+      return next;
+    });
+  }, [activeCanvasId]);
+
+  const switchCanvas = useCallback((canvasId: number) => {
+    canvasStatesRef.current.set(activeCanvasId, shapes);
+    setActiveCanvasId(canvasId);
+    setShapes(canvasStatesRef.current.get(canvasId) ?? []);
+    setSelectedId(null);
+    setDraftShape(null);
+    setDraftPoints([]);
+  }, [activeCanvasId, shapes]);
+
+  const createCanvas = useCallback(() => {
+    const nextCanvasId = canvasIds.length;
+    canvasStatesRef.current.set(nextCanvasId, []);
+    setCanvasIds((current) => [...current, nextCanvasId]);
+    switchCanvas(nextCanvasId);
+  }, [canvasIds.length, switchCanvas]);
+
+  useEffect(() => {
+    const toolShortcuts: Record<string, string> = {
+      "1": "select",
+      "2": "text",
+      "3": "pencil",
+      "4": "line",
+      "5": "arrow",
+      "6": "circle",
+      "7": "rectangle",
+      "8": "eraser",
+      "9": "pan",
+    };
+
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      const tool = toolShortcuts[event.key];
+      if (tool) {
+        event.preventDefault();
+        setSelectedTool(tool);
+      }
+    };
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, []);
+
+  useEffect(() => {
+    fetch(`${BACKEND_URL}/user/me`, { credentials: "include" })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const data = await response.json();
+        if (data.success && data.user) setAuthUser(data.user);
+      })
+      .catch(() => setAuthUser(null));
+  }, []);
+
+  async function updateProfile(name: string) {
+    const trimmedName = name.trim();
+    if (!trimmedName) return "Username cannot be empty";
+
+    const response = await fetch(`${BACKEND_URL}/user/profile`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ name: trimmedName }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) return data.message || "Unable to update profile";
+    setAuthUser(data.user);
+    return null;
+  }
+
+  async function signout() {
+    await fetch(`${BACKEND_URL}/user/signout`, { method: "POST", credentials: "include" });
+    setAuthUser(null);
+  }
 
   const getCanvasPoint = useCallback(
     (event: ReactMouseEvent<HTMLCanvasElement>) => {
@@ -275,19 +261,19 @@ function App() {
 
   const getCanvasScreenPoint = useCallback(
     (point: Point) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return null;
+      if (canvasSize.width === 0 || canvasSize.height === 0) return null;
 
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
+      if (canvasDisplaySize.width === 0 || canvasDisplaySize.height === 0) return null;
+
+      const scaleX = canvasSize.width / canvasDisplaySize.width;
+      const scaleY = canvasSize.height / canvasDisplaySize.height;
 
       return {
         x: (point.x * zoom + offset.x) / scaleX,
         y: (point.y * zoom + offset.y) / scaleY,
       };
     },
-    [offset, zoom],
+    [canvasDisplaySize, canvasSize, offset, zoom],
   );
 
   const getShapeBounds = useCallback((shape: Shape) => {
@@ -299,6 +285,18 @@ function App() {
         minY: Math.min(...ys),
         maxX: Math.max(...xs),
         maxY: Math.max(...ys),
+      };
+    }
+
+    if (shape.tool === "text") {
+      const fontSize = shape.fontSize ?? 24;
+      const textWidth = Math.max((shape.text?.length ?? 1) * fontSize * 0.62, 24);
+      const baseline = shape.startY ?? 0;
+      return {
+        minX: shape.startX ?? 0,
+        minY: baseline - fontSize,
+        maxX: (shape.startX ?? 0) + textWidth,
+        maxY: baseline + 6,
       };
     }
 
@@ -369,7 +367,7 @@ function App() {
   const getHandleAtPoint = useCallback(
     (shape: Shape, point: Point): ResizeHandle | null => {
       const { minX, minY, maxX, maxY } = getShapeBounds(shape);
-      const handleSize = 8;
+      const handleSize = 12;
       const handles: Array<{ name: ResizeHandle; x: number; y: number }> = [
         { name: "nw", x: minX, y: minY },
         { name: "ne", x: maxX, y: minY },
@@ -404,7 +402,7 @@ function App() {
       ctx.strokeRect(minX, minY, width, height);
       ctx.setLineDash([]);
 
-      const handleSize = 6;
+      const handleSize = 10;
       const handles: Array<{ x: number; y: number }> = [
         { x: minX, y: minY },
         { x: maxX, y: minY },
@@ -453,7 +451,7 @@ function App() {
       } else if (shape.tool === "text" && shape.text) {
         ctx.save();
         ctx.font = `${shape.fontSize ?? 24}px sans-serif`;
-        ctx.fillStyle = "#111827";
+        ctx.fillStyle = "#ffffff";
         ctx.fillText(shape.text, shape.startX ?? 0, shape.startY ?? 0);
         ctx.restore();
       } else if (
@@ -522,6 +520,7 @@ function App() {
     drawSelectionOutline,
     offset,
     selectedId,
+    selectedTool,
     shapes,
     zoom,
   ]);
@@ -539,6 +538,8 @@ function App() {
       const dpr = window.devicePixelRatio || 1;
       const width = Math.max(1, Math.round(rect.width * dpr));
       const height = Math.max(1, Math.round(rect.height * dpr));
+      setCanvasDisplaySize({ width: rect.width, height: rect.height });
+      setCanvasSize({ width, height });
 
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
@@ -670,12 +671,22 @@ function App() {
       wsRef.current = ws;
       roomInfoRef.current = nextRoomInfo;
       setRoomInfo(nextRoomInfo);
+      setShowJoinRoom(false);
       setPresenceUsers([{ name, status: "online" }]);
+      for (const canvasId of Array.from({ length: 10 }, (_, id) => id)) {
+        sendRoomMessage({
+          type: "board_sync",
+          from: name,
+          roomcode,
+          canvasId,
+          shapes: canvasStatesRef.current.get(canvasId) ?? (canvasId === activeCanvasId ? shapes : []),
+        });
+      }
       startCamera().catch((error) => {
         console.error("Error getting webcam stream:", error);
       });
     },
-    [startCamera],
+    [activeCanvasId, sendRoomMessage, shapes, startCamera],
   );
 
   const handlePresence = useCallback((users: PresenceUser[]) => {
@@ -699,6 +710,12 @@ function App() {
 
       if (event.type === "presence") {
         handlePresence(event.users);
+        return;
+      }
+
+      if (event.type === "board_state") {
+        canvasStatesRef.current.set(event.canvasId, event.shapes);
+        if (event.canvasId === activeCanvasId) setShapes(event.shapes);
         return;
       }
 
@@ -737,7 +754,14 @@ function App() {
       }
 
       if (event.type === "board_shape_add" && event.from !== currentRoom.name) {
-        setShapes((currentShapes) => {
+        if (event.canvasId !== activeCanvasId) {
+          canvasStatesRef.current.set(event.canvasId, [
+            ...(canvasStatesRef.current.get(event.canvasId) ?? []),
+            event.shape,
+          ]);
+          return;
+        }
+        updateShapes((currentShapes) => {
           if (currentShapes.some((shape) => shape.id === event.shape.id)) {
             return currentShapes;
           }
@@ -808,7 +832,16 @@ function App() {
         }
       }
     },
-    [callPeer, getPeerConnection, handlePresence, remoteName, sendRoomMessage, startCamera],
+    [
+      activeCanvasId,
+      callPeer,
+      getPeerConnection,
+      handlePresence,
+      remoteName,
+      sendRoomMessage,
+      startCamera,
+      updateShapes,
+    ],
   );
 
   useEffect(() => {
@@ -862,6 +895,28 @@ function App() {
     return !activeDrawerRef.current || activeDrawerRef.current === currentRoom?.name;
   };
 
+  const placeText = () => {
+    if (!textEditor || !textEditor.value.trim()) {
+      setTextEditor(null);
+      unlockBoardForMe();
+      return;
+    }
+
+    const nextShape = {
+      id: makeShapeId(),
+      tool: "text",
+      startX: textEditor.point.x,
+      startY: textEditor.point.y,
+      text: textEditor.value.trim(),
+      fontSize: 24,
+    };
+    updateShapes((current) => [...current, nextShape]);
+    sendBoardMessage({ type: "board_shape_add", shape: nextShape, canvasId: activeCanvasId });
+    setSelectedId(nextShape.id);
+    setTextEditor(null);
+    unlockBoardForMe();
+  };
+
   const lockBoardForMe = () => {
     const currentRoom = roomInfoRef.current;
     if (!currentRoom) return;
@@ -901,14 +956,20 @@ function App() {
     sendBoardMessage({ type: "board_cursor", point });
 
     if (selectedTool === "select") {
-      const hitShape = findShapeAtPoint(point);
+      const selectedShape = selectedId
+        ? shapes.find((shape) => shape.id === selectedId) ?? null
+        : null;
+      const selectedHandle = selectedShape
+        ? getHandleAtPoint(selectedShape, point)
+        : null;
+      const hitShape = selectedHandle ? selectedShape : findShapeAtPoint(point);
       if (!hitShape) {
         setSelectedId(null);
         unlockBoardForMe();
         return;
       }
 
-      const handle = getHandleAtPoint(hitShape, point);
+      const handle = selectedHandle ?? getHandleAtPoint(hitShape, point);
       const baseShape = { ...hitShape };
       interactionRef.current = {
         type: handle ? "resize" : "move",
@@ -935,22 +996,10 @@ function App() {
     }
 
     if (selectedTool === "text") {
-      const textValue = window.prompt("Enter text", "");
-      if (!textValue || !textValue.trim()) {
-        return;
-      }
+      const screenPoint = getCanvasScreenPoint(point);
+      if (!screenPoint) return;
 
-      const nextText = textValue.trim();
-      const nextShape = {
-        id: makeShapeId(),
-        tool: "text",
-        startX: point.x,
-        startY: point.y,
-        text: nextText,
-        fontSize: 24,
-      };
-      setShapes((current) => [...current, nextShape]);
-      sendBoardMessage({ type: "board_shape_add", shape: nextShape });
+      setTextEditor({ point, screenPoint, value: "" });
       unlockBoardForMe();
       return;
     }
@@ -996,7 +1045,7 @@ function App() {
       const deltaX = point.x - interactionRef.current.startX;
       const deltaY = point.y - interactionRef.current.startY;
 
-      setShapes((currentShapes) =>
+      updateShapes((currentShapes) =>
         currentShapes.map((shape) => {
           if (shape.id !== interactionRef.current?.id) {
             return shape;
@@ -1053,6 +1102,8 @@ function App() {
     ? getCanvasScreenPoint(remoteCursor.point)
     : null;
 
+  const isBoardLocked = Boolean(activeDrawer && activeDrawer !== roomInfo?.name);
+
   const handleMouseUp = () => {
     if (selectedTool === "pan") {
       panStartRef.current = null;
@@ -1068,8 +1119,8 @@ function App() {
     if (selectedTool === "pencil" || selectedTool === "eraser") {
       if (draftPoints.length > 0) {
         const nextShape = { id: makeShapeId(), tool: selectedTool, points: draftPoints };
-        setShapes((current) => [...current, nextShape]);
-        sendBoardMessage({ type: "board_shape_add", shape: nextShape });
+        updateShapes((current) => [...current, nextShape]);
+        sendBoardMessage({ type: "board_shape_add", shape: nextShape, canvasId: activeCanvasId });
       }
       setDraftPoints([]);
       unlockBoardForMe();
@@ -1081,43 +1132,77 @@ function App() {
       return;
     }
 
-    setShapes((current) => [...current, draftShape]);
-    sendBoardMessage({ type: "board_shape_add", shape: draftShape });
+    updateShapes((current) => [...current, draftShape]);
+    sendBoardMessage({ type: "board_shape_add", shape: draftShape, canvasId: activeCanvasId });
     setDraftShape(null);
     unlockBoardForMe();
   };
+
+  const renderJoinRoom = () => (
+    <JoinRoom
+      fullPage
+      onAuthenticated={setAuthUser}
+      onConnected={handleRoomConnected}
+      onPresence={handlePresence}
+      onMessage={(raw) => {
+        try {
+          handleRoomMessage(JSON.parse(raw) as RoomSocketMessage);
+        } catch {
+          console.warn("[WS] Ignored invalid message", raw);
+        }
+      }}
+      onClose={() => setShowJoinRoom(false)}
+    />
+  );
+
+  if (!roomInfo && !authUser) {
+    if (showJoinRoom) {
+      return renderJoinRoom();
+    }
+
+    return (
+      <>
+        <LandingPage
+          user={authUser}
+          onStart={() => setShowJoinRoom(true)}
+          onProfileUpdate={updateProfile}
+          onSignout={signout}
+        />
+      </>
+    );
+  }
 
   return (
     <>
       <div className="app-shell">
         <div className="topbar">
           <div id="sketch" className="tool-strip">
-            <button type="button" onClick={() => setSelectedTool("select")}>
-              Select
+            <button className={selectedTool === "select" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Select and move objects" aria-label="Select and move objects" onClick={() => setSelectedTool("select")}>
+              <span className="tool-shortcut">1</span> Select
             </button>
-            <button type="button" onClick={() => setSelectedTool("text")}>
-              T
+            <button className={selectedTool === "text" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Add text" aria-label="Add text" onClick={() => setSelectedTool("text")}>
+              <span className="tool-shortcut">2</span> T
             </button>
-            <button type="button" onClick={() => setSelectedTool("pencil")}>
-              <BsFillPencilFill style={{ color: "rgb(16, 16, 16)" }} />
+            <button className={selectedTool === "pencil" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Draw with pencil" aria-label="Draw with pencil" onClick={() => setSelectedTool("pencil")}>
+              <span className="tool-shortcut">3</span><BsFillPencilFill />
             </button>
-            <button type="button" onClick={() => setSelectedTool("line")}>
-              <MdOutlineHorizontalRule style={{ color: "rgb(16, 16, 16)" }} />
+            <button className={selectedTool === "line" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Draw a line" aria-label="Draw a line" onClick={() => setSelectedTool("line")}>
+              <span className="tool-shortcut">4</span><MdOutlineHorizontalRule />
             </button>
-            <button type="button" onClick={() => setSelectedTool("arrow")}>
-              <FaArrowRightLong style={{ color: "rgb(16, 16, 16)" }} />
+            <button className={selectedTool === "arrow" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Draw an arrow" aria-label="Draw an arrow" onClick={() => setSelectedTool("arrow")}>
+              <span className="tool-shortcut">5</span><FaArrowRightLong />
             </button>
-            <button type="button" onClick={() => setSelectedTool("circle")}>
-              <RiCircleLine style={{ color: "rgb(16, 16, 16)" }} />
+            <button className={selectedTool === "circle" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Draw a circle" aria-label="Draw a circle" onClick={() => setSelectedTool("circle")}>
+              <span className="tool-shortcut">6</span><RiCircleLine />
             </button>
-            <button type="button" onClick={() => setSelectedTool("rectangle")}>
-              <RiRectangleLine style={{ color: "rgb(16, 16, 16)" }} />
+            <button className={selectedTool === "rectangle" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Draw a rectangle" aria-label="Draw a rectangle" onClick={() => setSelectedTool("rectangle")}>
+              <span className="tool-shortcut">7</span><RiRectangleLine />
             </button>
-            <button type="button" onClick={() => setSelectedTool("eraser")}>
-              <RiEraserLine style={{ color: "rgb(16, 16, 16)" }} />
+            <button className={selectedTool === "eraser" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Erase objects" aria-label="Erase objects" onClick={() => setSelectedTool("eraser")}>
+              <span className="tool-shortcut">8</span><RiEraserLine />
             </button>
-            <button type="button" onClick={() => setSelectedTool("pan")}>
-              <IoHandLeftOutline style={{ color: "rgb(16, 16, 16)" }} />
+            <button className={selectedTool === "pan" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Pan the canvas" aria-label="Pan the canvas" onClick={() => setSelectedTool("pan")}>
+              <span className="tool-shortcut">9</span><IoHandLeftOutline />
             </button>
           </div>
 
@@ -1130,21 +1215,28 @@ function App() {
             </button>
             <span>Zoom: {zoom.toFixed(2)}x</span>
           </div>
+          <div className="canvas-tabs" aria-label="Shared canvases">
+            {canvasIds.map((canvasId) => (
+              <button
+                key={canvasId}
+                type="button"
+                className={activeCanvasId === canvasId ? "canvas-tab canvas-tab--active" : "canvas-tab"}
+                onClick={() => switchCanvas(canvasId)}
+                aria-label={`Open canvas ${canvasId + 1}`}
+              >
+                {canvasId + 1}
+              </button>
+            ))}
+            <button className="canvas-tab canvas-tab--new" type="button" onClick={createCanvas} aria-label="Create a new canvas" title="Create a new canvas">
+              +
+            </button>
+          </div>
           <div>
             <button
               id="open-join-room-btn"
               type="button"
               onClick={() => setShowJoinRoom(true)}
-              style={{
-                background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                padding: "6px 14px",
-                fontWeight: 600,
-                cursor: "pointer",
-                fontSize: "0.85rem",
-              }}
+              className="join-room-button"
             >
               Join Room
             </button>
@@ -1199,6 +1291,34 @@ function App() {
           )}
           <div className="canvas-frame">
             <div ref={canvasContainerRef} className="canvas-surface">
+              {textEditor && (
+                <form
+                  className="canvas-text-editor"
+                  style={{
+                    left: textEditor.screenPoint.x,
+                    top: textEditor.screenPoint.y - 30,
+                  }}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    placeText();
+                  }}
+                >
+                  <input
+                    autoFocus
+                    value={textEditor.value}
+                    placeholder="Type text..."
+                    onChange={(event) => setTextEditor((current) => current ? { ...current, value: event.target.value } : current)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setTextEditor(null);
+                      }
+                    }}
+                    aria-label="Text to place on canvas"
+                  />
+                  <button type="submit">Add</button>
+                </form>
+              )}
               {remoteCursor && remoteCursorPosition && (
                 <div
                   className="remote-cursor"
@@ -1214,7 +1334,7 @@ function App() {
                 id="myCanvas"
                 ref={canvasRef}
                 className={
-                  !canDrawOnBoard()
+                  isBoardLocked
                     ? "cursor-locked"
                     : selectedTool === "pan"
                     ? "cursor-grab"
@@ -1229,20 +1349,7 @@ function App() {
           </div>
         </div>
       </div>  
-    {showJoinRoom && (
-      <JoinRoom
-        onConnected={handleRoomConnected}
-        onPresence={handlePresence}
-        onMessage={(raw) => {
-          try {
-            handleRoomMessage(JSON.parse(raw) as RoomSocketMessage);
-          } catch {
-            console.warn("[WS] Ignored invalid message", raw);
-          }
-        }}
-        onClose={() => setShowJoinRoom(false)}
-      />
-    )}
+    {showJoinRoom && renderJoinRoom()}
     </>
   );
 }

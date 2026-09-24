@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { BACKEND_URL } from "../utils/apiurl.ts";
 import { connectWebSocket } from "../websockets/connect.ts";
 import "./JoinRoom.css";
@@ -15,14 +15,16 @@ type PresenceUser = {
 };
 
 interface JoinRoomProps {
+  onAuthenticated?: (user: { name: string; email: string }) => void;
   onConnected?: (ws: WebSocket, name: string, roomcode: string) => void;
   onPresence?: (users: PresenceUser[]) => void;
   onMessage?: (raw: string) => void;
   onClose?: () => void;
+  fullPage?: boolean;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }: JoinRoomProps) {
+export default function JoinRoom({ onAuthenticated, onConnected, onPresence, onMessage, onClose, fullPage = false }: JoinRoomProps) {
   // Step navigation
   const [step, setStep] = useState<Step>("auth");
   const [authMode, setAuthMode] = useState<AuthMode>("signin");
@@ -45,6 +47,23 @@ export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }
   const [message, setMessage] = useState("");
 
   const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    fetch(`${BACKEND_URL}/user/me`, { credentials: "include" })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          return;
+        }
+
+        setLoggedInName(data.user.name);
+        setRoomMode("create");
+        setStep("join");
+      })
+      .catch(() => {
+        // Keep the auth form available when the backend is temporarily offline.
+      });
+  }, []);
 
   // ─── Auth handler ─────────────────────────────────────────────────────────
   async function handleAuth() {
@@ -73,6 +92,7 @@ export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }
       const res = await fetch(`${BACKEND_URL}${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(body),
       });
 
@@ -86,11 +106,18 @@ export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }
 
       // On signin we need a name — use the email prefix as fallback,
       // but for signup we have authName directly.
-      const resolvedName = isSignup
+      const resolvedName = data.user?.name ?? (isSignup
         ? authName
-        : authEmail.split("@")[0]; // e.g. "rahul@gmail.com" → "rahul"
+        : authEmail.split("@")[0]);
+
+      if (onAuthenticated) {
+        onAuthenticated({ name: resolvedName, email: data.user?.email ?? authEmail });
+        onClose?.();
+        return;
+      }
 
       setLoggedInName(resolvedName);
+      setRoomMode("create");
       setStatus("success");
       setMessage(isSignup ? "Account created! Now join a room." : "Signed in! Now join a room.");
 
@@ -108,6 +135,11 @@ export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }
 
   // ─── Create Room handler ─────────────────────────────────────────────────
   async function handleCreate() {
+    if (!/^\d{4}$/.test(roomcode)) {
+      setStatus("error");
+      setMessage("Room code must contain exactly 4 digits.");
+      return;
+    }
     if (!roomcode.trim() || !roomName.trim() || !roomDescription.trim()) {
       setStatus("error");
       setMessage("Please fill in room name, description and room code.");
@@ -121,6 +153,7 @@ export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }
       const res = await fetch(`${BACKEND_URL}/room/createroom`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           name: roomName,
           description: roomDescription,
@@ -147,6 +180,11 @@ export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }
 
   // ─── Join Room handler ────────────────────────────────────────────────────
   async function handleJoin() {
+    if (!/^\d{4}$/.test(roomcode)) {
+      setStatus("error");
+      setMessage("Room code must contain exactly 4 digits.");
+      return;
+    }
     if (!roomcode.trim()) {
       setStatus("error");
       setMessage("Please enter a room code.");
@@ -160,6 +198,7 @@ export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }
       const res = await fetch(`${BACKEND_URL}/room/validatingroomcode`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ roomcode, name: loggedInName }),
       });
 
@@ -216,16 +255,33 @@ export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       if (step === "auth") handleAuth();
-      if (step === "join") roomMode === "join" ? handleJoin() : handleCreate();
+      if (step === "join") {
+        if (roomMode === "join") handleJoin();
+        else handleCreate();
+      }
     }
   };
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <div
-      className="jr-overlay"
-      onClick={(e) => e.target === e.currentTarget && onClose?.()}
+      className={`jr-overlay ${fullPage ? "jr-overlay--page" : ""}`}
+      onClick={(e) => !fullPage && e.target === e.currentTarget && onClose?.()}
     >
+      {fullPage && (
+        <aside className="jr-page-intro">
+          <a className="jr-page-brand" href="#top" onClick={onClose}>
+            <span className="jr-page-brand-mark"><span /></span>
+            <span>codesketch</span>
+          </a>
+          <div>
+            <p className="jr-page-kicker">Your shared space starts here</p>
+            <h1>Make room<br /><em>for ideas.</em></h1>
+            <p className="jr-page-copy">Sign in, create your room, and bring your team into the same train of thought.</p>
+          </div>
+          <p className="jr-page-flow">Sign in <span>→</span> create a room <span>→</span> start sketching</p>
+        </aside>
+      )}
       <div className="jr-panel" onKeyDown={handleKeyDown}>
         {/* Header */}
         <div className="jr-header">
@@ -248,30 +304,10 @@ export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }
             id="jr-close-btn"
             onClick={onClose}
             className="jr-close"
-            aria-label="Close"
+            aria-label={fullPage ? "Back to home" : "Close"}
           >
-            ✕
+            {fullPage ? "Back" : "✕"}
           </button>
-        </div>
-
-        {/* Step indicators */}
-        <div className="jr-steps">
-          {(["auth", "join", "done"] as const).map((s, i) => (
-            <div key={s} className="jr-step-item">
-              <div
-                className={`jr-step-dot ${
-                  step === s
-                    ? "jr-step-dot--active"
-                    : ["join", "done", "connecting"].indexOf(step) > ["auth", "join", "done"].indexOf(s)
-                    ? "jr-step-dot--done"
-                    : ""
-                }`}
-              >
-                {i + 1}
-              </div>
-              {i < 2 && <div className="jr-step-line" />}
-            </div>
-          ))}
         </div>
 
         {/* ── STEP 1: Auth ─────────────────────────────────────────── */}
@@ -294,6 +330,22 @@ export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }
                 Sign Up
               </button>
             </div>
+
+            {authMode === "signin" && (
+              <button
+                type="button"
+                className="jr-demo-btn"
+                onClick={() => {
+                  setAuthEmail("demo@gmail.com");
+                  setAuthPassword("demo");
+                  setMessage("Demo account loaded. Ready to sign in.");
+                  setStatus("idle");
+                }}
+              >
+                <span>Try the demo account</span>
+                <small>demo@codesketch.local</small>
+              </button>
+            )}
 
             <div className="jr-fields">
               {authMode === "signup" && (
@@ -434,8 +486,11 @@ export default function JoinRoom({ onConnected, onPresence, onMessage, onClose }
                   className="jr-input"
                   type="text"
                   placeholder="e.g. 9912"
+                  inputMode="numeric"
+                  pattern="[0-9]{4}"
+                  maxLength={4}
                   value={roomcode}
-                  onChange={(e) => setRoomcode(e.target.value)}
+                  onChange={(e) => setRoomcode(e.target.value.replace(/\D/g, "").slice(0, 4))}
                   disabled={status === "loading"}
                   autoFocus={roomMode === "join"}
                 />
