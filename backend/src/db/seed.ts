@@ -73,7 +73,7 @@ async function seed() {
   }
 
   console.log("Seed complete");
-  console.log("Demo login: demo@codesketch.local / password123");
+  console.log("Demo login: demo@gmail.com / demo");
   console.log("Room codes: 1001, 1002");
 }
 

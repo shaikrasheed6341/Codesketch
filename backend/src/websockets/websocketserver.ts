@@ -10,6 +10,7 @@ console.log(`[WS] WebSocket Server is listening on port ${WS_PORT}`);
 
 // Map of roomcode -> Set of active WebSocket connections
 const roomClients = new Map<string, Set<WebSocket>>();
+const roomBoards = new Map<string, Map<number, unknown[]>>();
 // Map of WebSocket -> metadata (roomcode, name)
 const clientMeta = new Map<WebSocket, { roomcode: string; name: string }>();
 
@@ -30,6 +31,13 @@ wss.on("connection", (ws: WebSocket) => {
         }
         roomClients.get(codeStr)!.add(ws);
 
+        const boards = roomBoards.get(codeStr);
+        if (boards) {
+          for (const [canvasId, shapes] of boards) {
+            ws.send(JSON.stringify({ type: "board_state", roomcode: codeStr, canvasId, shapes }));
+          }
+        }
+
         console.log(`[WS] User '${name}' joined room '${codeStr}'`);
 
         // Acknowledge join
@@ -44,7 +52,25 @@ wss.on("connection", (ws: WebSocket) => {
         broadcastPresence(codeStr);
       } else if (data.type === "ping") {
         ws.send(JSON.stringify({ type: "pong" }));
+      } else if (data.type === "board_sync" && data.roomcode && Number.isInteger(data.canvasId) && Array.isArray(data.shapes)) {
+        let boards = roomBoards.get(String(data.roomcode));
+        if (!boards) {
+          boards = new Map<number, unknown[]>();
+          roomBoards.set(String(data.roomcode), boards);
+        }
+        boards.set(data.canvasId, data.shapes);
       } else if (data.roomcode) {
+        if (data.type === "board_shape_add" && Number.isInteger(data.canvasId) && data.shape) {
+          let boards = roomBoards.get(String(data.roomcode));
+          if (!boards) {
+            boards = new Map<number, unknown[]>();
+            roomBoards.set(String(data.roomcode), boards);
+          }
+          const currentShapes = boards.get(data.canvasId) ?? [];
+          if (!currentShapes.some((shape) => (shape as { id?: string }).id === data.shape.id)) {
+            boards.set(data.canvasId, [...currentShapes, data.shape]);
+          }
+        }
         broadcastToRoom(String(data.roomcode), data, ws);
       }
     } catch (err) {

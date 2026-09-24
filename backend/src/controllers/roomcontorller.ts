@@ -11,8 +11,8 @@ export async function createroom(req:Request , res:Response ) {
     const roomcodeKey = String(roomcode).trim();
 
     try{
-        if(!name || !description || !roomcodeKey || Number.isNaN(normalizedRoomcode)){
-            return res.status(411).json({success:false,message:"Please provide all the required fields"})
+        if(!name || !description || !/^\d{4}$/.test(roomcodeKey)){
+            return res.status(400).json({success:false,message:"Room code must contain exactly 4 digits"})
         }
         const existingRoom = await db.select().from(room).where(eq(room.roomcode, normalizedRoomcode));
         if(existingRoom[0] || roomcodeHashmap.has(roomcodeKey)){
@@ -49,8 +49,8 @@ export async function validatingroomcode(req:Request ,res:Response ){
     const normalizedRoomcode = Number(roomcode);
     const roomcodeKey = String(roomcode).trim();
     try{
-       if(!roomcodeKey || Number.isNaN(normalizedRoomcode)){
-        return res.status(411).json({success:false,message:"Please provide valid room code"})
+       if(!/^\d{4}$/.test(roomcodeKey)){
+        return res.status(400).json({success:false,message:"Room code must contain exactly 4 digits"})
        }
        const checkroom = await db.select().from(room).where(eq(room.roomcode,normalizedRoomcode));
        const validateuser = await db.select().from(user).where(eq(user.name,name)); 
