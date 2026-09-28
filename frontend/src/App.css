@@ -455,6 +455,15 @@ html, body, #root {
 .topbar {
   min-height: 48px;
   padding: 0 2px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.topbar-room-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: start;
 }
 
 .tool-strip,
@@ -468,6 +477,8 @@ html, body, #root {
 
 .tool-strip { gap: 4px; }
 .zoom-controls { gap: 4px; padding: 4px 6px; }
+.tool-strip { justify-self: center; }
+.zoom-controls { justify-self: end; }
 
 .tool-button {
   min-width: 34px;
@@ -549,6 +560,24 @@ html, body, #root {
 
 .video-grid { gap: 10px; }
 
+.video-call-slot { overflow-y: auto; }
+
+.video-toggle-button {
+  width: 100%;
+  margin-top: 10px;
+  border-color: #e2dcd1;
+  background: #fffdf8;
+  color: #344148;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.video-toggle-button:hover {
+  border-color: #ed7258;
+  background: #fff4f0;
+  color: #c9513e;
+}
+
 .video-wrap {
   border: 1px solid rgba(255, 255, 255, 0.5);
   border-radius: 11px;
@@ -609,13 +638,19 @@ html, body, #root {
 
 @media (max-width: 900px) {
   .app-shell { padding: 10px; }
-  .topbar { align-items: stretch; }
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .topbar-room-controls { justify-content: center; }
   .tool-strip, .zoom-controls { justify-content: center; }
   .workspace-layout { padding: 0 10px 10px; }
   .video-call-slot { min-width: 0; }
 }
 
 @media (max-width: 560px) {
+  .topbar-room-controls { width: 100%; }
   .tool-strip { width: 100%; }
   .zoom-controls { width: 100%; justify-content: space-between; }
   .join-room-button { width: 100%; }

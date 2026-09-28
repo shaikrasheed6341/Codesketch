@@ -224,9 +224,25 @@ export default function JoinRoom({ onAuthenticated, onConnected, onPresence, onM
     setMessage("Opening connection...");
 
     const ws = connectWebSocket(roomcode, loggedInName, (raw) => {
-      onMessage?.(raw);
       try {
         const event = JSON.parse(raw);
+        if (event.type === "room_full") {
+          setStep("join");
+          setStatus("error");
+          setMessage(event.message || "This room has reached its 10-member limit.");
+          wsRef.current = null;
+          ws.close();
+          return;
+        }
+        if (event.type === "joined" && event.success) {
+          setStep("done");
+          setStatus("success");
+          setMessage("Connected! Starting camera...");
+          onConnected?.(ws, loggedInName, roomcode);
+          setTimeout(() => onClose?.(), 1200);
+          return;
+        }
+        onMessage?.(raw);
         if (event.type === "presence" && Array.isArray(event.users)) {
           onPresence?.(event.users);
         }
@@ -235,14 +251,6 @@ export default function JoinRoom({ onAuthenticated, onConnected, onPresence, onM
       }
     });
     wsRef.current = ws;
-
-    ws.addEventListener("open", () => {
-      setStep("done");
-      setStatus("success");
-      setMessage("Connected! Starting camera...");
-      onConnected?.(ws, loggedInName, roomcode);
-      setTimeout(() => onClose?.(), 1200);
-    });
 
     ws.addEventListener("error", () => {
       setStep("join");

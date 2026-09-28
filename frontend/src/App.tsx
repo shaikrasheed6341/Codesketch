@@ -116,6 +116,8 @@ type BoardOutgoingMessage = BoardSocketMessage extends infer Message
     : never
   : never;
 
+type RemoteParticipant = { name: string; stream: MediaStream };
+
 const makeShapeId = () =>
   `shape-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -123,7 +125,6 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasContainerRef = useRef<HTMLDivElement | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -151,8 +152,8 @@ function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [textEditor, setTextEditor] = useState<TextEditor | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [remoteName, setRemoteName] = useState("");
+  const [remoteParticipants, setRemoteParticipants] = useState<RemoteParticipant[]>([]);
+  const [showAllVideos, setShowAllVideos] = useState(false);
   const [showJoinRoom, setShowJoinRoom] = useState(false);
   const [roomInfo, setRoomInfo] = useState<{ name: string; roomcode: string } | null>(null);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
@@ -607,8 +608,10 @@ function App() {
       peer.addEventListener("track", (event) => {
         const [incomingStream] = event.streams;
         if (incomingStream) {
-          setRemoteStream(incomingStream);
-          setRemoteName(peerName);
+          setRemoteParticipants((participants) => [
+            ...participants.filter((participant) => participant.name !== peerName),
+            { name: peerName, stream: incomingStream },
+          ]);
         }
       });
 
@@ -628,26 +631,23 @@ function App() {
       peer.addEventListener("connectionstatechange", () => {
         if (["closed", "failed", "disconnected"].includes(peer.connectionState)) {
           peersRef.current.delete(peerName);
-          setRemoteStream((currentStream) => {
-            if (remoteName === peerName) {
-              setRemoteName("");
-              return null;
-            }
-            return currentStream;
-          });
+          setRemoteParticipants((participants) =>
+            participants.filter((participant) => participant.name !== peerName),
+          );
         }
       });
 
       peersRef.current.set(peerName, peer);
       return peer;
     },
-    [remoteName, sendRoomMessage],
+    [sendRoomMessage],
   );
 
   const callPeer = useCallback(
     async (peerName: string) => {
       const currentRoom = roomInfoRef.current;
       if (!currentRoom || peerName === currentRoom.name) return;
+      if (peersRef.current.has(peerName)) return;
 
       const localStream = await startCamera();
       const peer = getPeerConnection(peerName, localStream);
@@ -702,7 +702,14 @@ function App() {
         return onlineUser ?? { name, status: "offline" };
       });
     });
-  }, []);
+
+    const currentRoom = roomInfoRef.current;
+    if (currentRoom) {
+      users
+        .filter((user) => user.status === "online" && currentRoom.name.localeCompare(user.name) < 0)
+        .forEach((user) => void callPeer(user.name));
+    }
+  }, [callPeer]);
 
   const handleRoomMessage = useCallback(
     async (event: RoomSocketMessage) => {
@@ -776,7 +783,9 @@ function App() {
       }
 
       if (event.type === "user_joined" && event.name !== currentRoom.name) {
-        await callPeer(event.name);
+        if (currentRoom.name.localeCompare(event.name) < 0) {
+          await callPeer(event.name);
+        }
         return;
       }
 
@@ -784,10 +793,9 @@ function App() {
         const peer = peersRef.current.get(event.name);
         peer?.close();
         peersRef.current.delete(event.name);
-        if (remoteName === event.name) {
-          setRemoteName("");
-          setRemoteStream(null);
-        }
+        setRemoteParticipants((participants) =>
+          participants.filter((participant) => participant.name !== event.name),
+        );
         if (activeDrawerRef.current === event.name) {
           activeDrawerRef.current = "";
           setActiveDrawer("");
@@ -837,7 +845,6 @@ function App() {
       callPeer,
       getPeerConnection,
       handlePresence,
-      remoteName,
       sendRoomMessage,
       startCamera,
       updateShapes,
@@ -850,15 +857,6 @@ function App() {
     }
   }, [stream]);
 
-  useEffect(() => {
-    if (
-      remoteVideoRef.current &&
-      remoteStream &&
-      remoteVideoRef.current.srcObject !== remoteStream
-    ) {
-      remoteVideoRef.current.srcObject = remoteStream;
-    }
-  }, [remoteStream]);
 
   const zoomAtPoint = useCallback(
     (factor: number, x: number, y: number) => {
@@ -1155,6 +1153,11 @@ function App() {
     />
   );
 
+  const onlineMemberCount = presenceUsers.filter((user) => user.status === "online").length;
+  const visibleRemoteParticipants = showAllVideos
+    ? remoteParticipants
+    : remoteParticipants.slice(0, 1);
+
   if (!roomInfo && !authUser) {
     if (showJoinRoom) {
       return renderJoinRoom();
@@ -1176,6 +1179,32 @@ function App() {
     <>
       <div className="app-shell">
         <div className="topbar">
+          <div className="topbar-room-controls">
+            <button
+              id="open-join-room-btn"
+              type="button"
+              onClick={() => setShowJoinRoom(true)}
+              className="join-room-button"
+            >
+              Join Room
+            </button>
+            <div className="canvas-tabs" aria-label="Shared canvases">
+              {canvasIds.map((canvasId) => (
+                <button
+                  key={canvasId}
+                  type="button"
+                  className={activeCanvasId === canvasId ? "canvas-tab canvas-tab--active" : "canvas-tab"}
+                  onClick={() => switchCanvas(canvasId)}
+                  aria-label={`Open canvas ${canvasId + 1}`}
+                >
+                  {canvasId + 1}
+                </button>
+              ))}
+              <button className="canvas-tab canvas-tab--new" type="button" onClick={createCanvas} aria-label="Create a new canvas" title="Create a new canvas">
+                +
+              </button>
+            </div>
+          </div>
           <div id="sketch" className="tool-strip">
             <button className={selectedTool === "select" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Select and move objects" aria-label="Select and move objects" onClick={() => setSelectedTool("select")}>
               <span className="tool-shortcut">1</span> Select
@@ -1184,7 +1213,7 @@ function App() {
               <span className="tool-shortcut">2</span> T
             </button>
             <button className={selectedTool === "pencil" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Draw with pencil" aria-label="Draw with pencil" onClick={() => setSelectedTool("pencil")}>
-              <span className="tool-shortcut">3</span><BsFillPencilFill />
+              <span className="tool-shortcut        ">3</span><BsFillPencilFill />
             </button>
             <button className={selectedTool === "line" ? "tool-button tool-button--active" : "tool-button"} type="button" title="Draw a line" aria-label="Draw a line" onClick={() => setSelectedTool("line")}>
               <span className="tool-shortcut">4</span><MdOutlineHorizontalRule />
@@ -1215,55 +1244,45 @@ function App() {
             </button>
             <span>Zoom: {zoom.toFixed(2)}x</span>
           </div>
-          <div className="canvas-tabs" aria-label="Shared canvases">
-            {canvasIds.map((canvasId) => (
-              <button
-                key={canvasId}
-                type="button"
-                className={activeCanvasId === canvasId ? "canvas-tab canvas-tab--active" : "canvas-tab"}
-                onClick={() => switchCanvas(canvasId)}
-                aria-label={`Open canvas ${canvasId + 1}`}
-              >
-                {canvasId + 1}
-              </button>
-            ))}
-            <button className="canvas-tab canvas-tab--new" type="button" onClick={createCanvas} aria-label="Create a new canvas" title="Create a new canvas">
-              +
-            </button>
-          </div>
-          <div>
-            <button
-              id="open-join-room-btn"
-              type="button"
-              onClick={() => setShowJoinRoom(true)}
-              className="join-room-button"
-            >
-              Join Room
-            </button>
-          </div>
         </div>
       </div>
       <div className="workspace-layout">
         <div className="video-call-slot">
           <div className="video-grid">
-          <div className="video-wrap">
-            <video
-              ref={localVideoRef}
-              autoPlay
-              playsInline
-              muted
-            />
-            <div className="video-label">{roomInfo?.name ?? "You"}</div>
-          </div>
-          <div className="video-wrap">
-            {remoteStream ? (
-              <video ref={remoteVideoRef} autoPlay playsInline />
-            ) : (
-              <div className="video-placeholder">Waiting for user 2</div>
+            <div className="video-wrap">
+              <video ref={localVideoRef} autoPlay playsInline muted />
+              <div className="video-label">{roomInfo?.name ?? "You"}</div>
+            </div>
+            {visibleRemoteParticipants.map((participant) => (
+              <div className="video-wrap" key={participant.name}>
+                <video
+                  ref={(video) => {
+                    if (video && video.srcObject !== participant.stream) {
+                      video.srcObject = participant.stream;
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                />
+                <div className="video-label">{participant.name}</div>
+              </div>
+            ))}
+            {remoteParticipants.length === 0 && (
+              <div className="video-wrap">
+                <div className="video-placeholder">Waiting for another member</div>
+              </div>
             )}
-            <div className="video-label">{remoteName || "cam 2"}</div>
           </div>
-          </div>
+          {onlineMemberCount > 2 && (
+            <button
+              className="video-toggle-button"
+              type="button"
+              onClick={() => setShowAllVideos((visible) => !visible)}
+              aria-expanded={showAllVideos}
+            >
+              {showAllVideos ? "Hide extra videos" : `Show all videos (${onlineMemberCount})`}
+            </button>
+          )}
           <div className="presence-panel">
             <div className="presence-header">
               <span>Room</span>
