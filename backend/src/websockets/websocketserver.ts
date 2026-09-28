@@ -24,6 +24,19 @@ wss.on("connection", (ws: WebSocket) => {
       if (data.type === "join") {
         const { roomcode, name } = data;
         const codeStr = String(roomcode);
+
+        const existingClients = roomClients.get(codeStr) ?? new Set<WebSocket>();
+        const existingNames = new Set(
+          Array.from(existingClients, (client) => clientMeta.get(client)?.name).filter(Boolean),
+        );
+        if (!existingNames.has(name) && existingNames.size >= 10) {
+          ws.send(JSON.stringify({
+            type: "room_full",
+            message: "This room has reached its 10-member limit.",
+          }), () => ws.close());
+          return;
+        }
+
         clientMeta.set(ws, { roomcode: codeStr, name });
 
         if (!roomClients.has(codeStr)) {
